@@ -14,11 +14,11 @@ Bash engine stays the only thing that touches your guests.
 - `require_approval` mode (default off) for two-step approve→start
 
 ## Install
-The repo is currently **private** — on the PVE node, with a `contents:read`
-token or `gh` (details in [docs/INSTALL.md](docs/INSTALL.md)):
+On the PVE node (details in [docs/INSTALL.md](docs/INSTALL.md)):
 
-    GH_TOKEN=*** bash install.sh
-    # or: gh release download --repo it-koncept/Proxmox-VE-Updater-Gui --pattern '*.deb' && sudo apt-get install ./pve-updater_*_all.deb
+    curl -fsSL https://raw.githubusercontent.com/it-koncept/Proxmox-VE-Updater-Gui/main/install.sh -o install.sh
+    less install.sh   # review before running
+    sudo bash install.sh
 
 Then tunnel to the UI: `ssh -L 8765:127.0.0.1:8765 root@<node>` →
 http://localhost:8765/

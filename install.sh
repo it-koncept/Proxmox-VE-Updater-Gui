@@ -9,7 +9,7 @@ REPO="it-koncept/Proxmox-VE-Updater-Gui"
 command -v pvesh >/dev/null 2>&1 || { echo "ERROR: pvesh not found — this does not look like a Proxmox VE node." >&2; exit 1; }
 
 API="https://api.github.com/repos/${REPO}/releases/latest"
-# This repo is currently PRIVATE: pass a token with read access, e.g.
+# The repo is public; if it is ever private again, pass a token:
 #   GH_TOKEN=*** bash install.sh
 # (fine-grained PAT, scope: contents:read on this repo only).
 AUTH=()
