@@ -1,5 +1,5 @@
 Package: pve-updater
-Version: 0.9.0-3
+Version: 0.9.0-10
 Section: admin
 Priority: optional
 Architecture: all

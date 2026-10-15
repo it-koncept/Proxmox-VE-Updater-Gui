@@ -27,18 +27,32 @@ class PveAuth:
 
     @staticmethod
     def _safe_ticket(ticket):
-        # Reject anything that could inject headers.
+        # Reject anything that could inject headers or break cookie parsing.
+        # NOTE: '=' is deliberately ALLOWED: real PVE tickets contain base64
+        # padding; cookie parsing splits on the FIRST '=' only (partition).
         if not isinstance(ticket, str) or not ticket:
             return False
         if len(ticket) > 4096:
             return False
-        if any(c in ticket for c in ("\r", "\n", "\x00", ";", " ", "=")):
+        if any(c in ticket for c in ("\r", "\n", "\x00", ";", " ")):
             return False
         return True
 
     def _get(self, path, ticket):
         req = urllib.request.Request(self.base + path)
         req.add_header("Cookie", "PVEAuthCookie=" + ticket)
+        with urllib.request.urlopen(req, timeout=self.timeout,
+                                    context=self.ssl_ctx) as resp:
+            return json.loads(resp.read().decode("utf-8", "replace"))
+
+    def _post(self, path, ticket, body, csrf=None):
+        req = urllib.request.Request(self.base + path,
+                                     data=json.dumps(body).encode("utf-8"),
+                                     method="POST")
+        req.add_header("Cookie", "PVEAuthCookie=" + ticket)
+        req.add_header("Content-Type", "application/json")
+        if csrf:
+            req.add_header("CSRFPreventionToken", csrf)
         with urllib.request.urlopen(req, timeout=self.timeout,
                                     context=self.ssl_ctx) as resp:
             return json.loads(resp.read().decode("utf-8", "replace"))
@@ -82,32 +96,64 @@ class PveAuth:
         return (ticket, csrf, userid)
 
     def verify(self, ticket):
-        """Return {'userid':..., 'permissions': {...}} or None if invalid."""
+        """Return {'userid':..., 'permissions': {...}} or None if invalid.
+
+        Two response shapes are handled:
+        - /access/permissions?effective=1 -> {userid, permissions} (works
+          for root tickets; PVE 8.4 returns 400 for non-root callers)
+        - plain /access/permissions -> the caller's effective map directly
+          (path -> {priv: 1}); userid is then taken from the ticket format
+          'PVE:<userid>:<timestamp>:<checksum>' (display/audit only; the
+          permission map itself always comes from PVE).
+        """
         if not self._safe_ticket(ticket):
             return None
+        userid, perms = None, None
         try:
-            data = self._get("/access/permissions?effective=1", ticket)
+            data = self._get("/access/permissions?effective=1", ticket).get("data") or {}
+            userid = data.get("userid")
+            perms = data.get("permissions")
         except Exception:
+            pass
+        if not isinstance(perms, dict):
+            try:
+                perms = self._get("/access/permissions", ticket).get("data")
+            except Exception:
+                return None
+        if not isinstance(perms, dict):
             return None
-        d = data.get("data") or {}
-        userid = d.get("userid")
-        perms = d.get("permissions")
-        if not isinstance(userid, str) or not isinstance(perms, dict):
+        if not isinstance(userid, str) or not userid:
+            parts = ticket.split(":")
+            userid = parts[1] if len(parts) >= 4 else None
+        if not isinstance(userid, str) or not userid:
             return None
         return {"userid": userid, "permissions": perms}
 
     def csrf_ok(self, ticket, token):
-        """CSRFPreventionToken must match the token PVE issues for this ticket."""
+        """CSRFPreventionToken must be the token PVE issued for this ticket.
+
+        PVE 8.4 has NO /access/csrf_token endpoint (GET and POST are both
+        'not implemented'). Instead we let PVE's own CSRF guard do the
+        verification: POST a deliberately invalid body to a harmless
+        endpoint. PVE checks the CSRF header BEFORE any handler or permission
+        check runs:
+          - forged/missing token  -> 401 (CSRF guard rejects)
+          - valid token           -> 400 (param validation) or 403 (ACL)
+        The empty body can never create anything (required params missing),
+        so the probe has no side effects even for privileged callers.
+        """
         if not self._safe_ticket(ticket) or not isinstance(token, str) or not token:
             return False
         if len(token) > 4096 or any(c in token for c in ("\r", "\n", "\x00")):
             return False
         try:
-            data = self._get("/access/csrf_token", ticket)
+            self._post("/access/domains", ticket, {}, csrf=token)
+            # 2xx would mean a realm was created: must never happen; fail safe.
+            return False
+        except urllib.error.HTTPError as e:
+            return e.code != 401
         except Exception:
             return False
-        expected = (data.get("data") or {}).get("CSRFPreventionToken")
-        return isinstance(expected, str) and expected == token
 
 
 def path_privileges(permissions, path):

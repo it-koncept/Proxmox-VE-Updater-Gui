@@ -67,24 +67,18 @@ class Backend:
                               capture_output=True, text=True, timeout=timeout)
 
     def scan_report(self, extra_args):
-        import tempfile
+        # the engine needs root even for --scan (exec into guests); route
+        # through the root runner's closed read-only verb.
         p = None
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tf:
-            rp = tf.name
         try:
-            p = self.engine(["--scan"] + extra_args + ["--report", rp],
-                            self.cfg.get("scan_timeout", 600))
+            p = subprocess.run(self.cfg["runner_cmd"] + ["--scan-report"] + extra_args,
+                               capture_output=True, text=True,
+                               timeout=self.cfg.get("scan_timeout", 600) + 30)
             if p.returncode not in (0, 1):
                 return None, p
-            with open(rp) as f:
-                return json.load(f), p
+            return json.loads(p.stdout), p
         except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
             return None, p
-        finally:
-            try:
-                os.remove(rp)
-            except OSError:
-                pass
 
     @staticmethod
     def scan_packages(report, target_type, target_id):
@@ -269,7 +263,8 @@ def make_handler(be):
                                        cfg["read_privs"], "read permission required"):
                     return
                 try:
-                    p = be.engine(["--backup-status"], 120)
+                    p = subprocess.run(cfg["runner_cmd"] + ["--backup-status"],
+                                       capture_output=True, text=True, timeout=150)
                 except subprocess.TimeoutExpired:
                     return self._send(504, {"error": "backup-status timed out"})
                 if p.returncode != 0:

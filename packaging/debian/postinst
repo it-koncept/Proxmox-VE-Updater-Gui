@@ -21,7 +21,11 @@ fi
 # --- state dir (queue, sqlite history, logs) --------------------------------
 install -d -m 0750 -o "$PKG_USER" -g "$PKG_GROUP" "$STATE_DIR"
 
-# --- config: fill in node name on first install, tighten perms ---------------
+# --- config: create from default on first install, fill node, tighten perms -
+if [ ! -f "$CONF" ]; then
+    install -d -m 0755 /etc/pve-updater
+    install -m 0640 /usr/share/pve-updater/config.json.default "$CONF"
+fi
 if grep -q '"node": "CHANGE_ME"' "$CONF" 2>/dev/null; then
     node="$(hostname)"
     sed -i "s/\"node\": \"CHANGE_ME\"/\"node\": \"$node\"/" "$CONF"

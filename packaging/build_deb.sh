@@ -7,7 +7,7 @@ set -eu
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 ENGINE="${1:-$ROOT/../Proxmox-VE-Updater/update-vms.sh}"
-VERSION="0.9.0-3"
+VERSION="0.9.0-10"
 REQ_ENGINE_VERSION="3.5.0"
 
 # --- pin the engine: refuse to package an unexpected version ----------------
@@ -40,8 +40,10 @@ install -m 0644 integration/sudoers.d.pve-updater "$STAGE/etc/sudoers.d/pve-upda
 install -m 0644 integration/systemd/pve-updater.service \
         "$STAGE/etc/systemd/system/pve-updater.service"
 
-# package config: engine path + node placeholder (postinst fills node)
-python3 - "$STAGE/etc/pve-updater/config.json" <<'PY'
+# package config DEFAULT: shipped under /usr/share (NOT a conffile: dpkg
+# conffile prompts break non-interactive upgrades); postinst copies it to
+# /etc/pve-updater/config.json on first install only.
+python3 - "$STAGE/usr/share/pve-updater/config.json.default" <<'PY'
 import json, sys
 cfg = {
   "engine": "/usr/local/bin/update-vms.sh",
@@ -52,7 +54,7 @@ cfg = {
   "update_privs": ["VM.Allocate"],
   "host_update_privs": ["Sys.Modify"],
   "approval_ttl_s": 900,
-  "runner_cmd": ["sudo", "/usr/local/sbin/pve-updater-runner"],
+  "runner_cmd": ["sudo", "/usr/local/sbin/pve-updater-runner", "--config", "/etc/pve-updater/config.json"],
   "scan_timeout": 600,
   "update_timeout": 7200,
   "runner_timeout": 7800,

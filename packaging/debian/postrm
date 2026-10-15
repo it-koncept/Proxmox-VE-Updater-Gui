@@ -8,6 +8,7 @@
 set -eu
 case "${1:-}" in
     purge)
+        rm -f /etc/pve-updater/config.json
         systemctl daemon-reload 2>/dev/null || true
         systemctl reset-failed pve-updater.service 2>/dev/null || true
         echo "pve-updater: purged. Audit data kept in /var/lib/pve-updater" \

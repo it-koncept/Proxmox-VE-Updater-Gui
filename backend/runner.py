@@ -208,11 +208,64 @@ def process_job(cfg, queue_dir, path):
                  log_text=log_text)
 
 
+def _readonly_run(cfg, argv, report_path, timeout):
+    """Run a read-only engine verb as root; print JSON on stdout."""
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        sys.stderr.write("runner: engine timed out\n")
+        return 124
+    if p.stderr:
+        sys.stderr.write(p.stderr)
+    if report_path:
+        # engine --scan: stdout is human log lines; the JSON lives in the
+        # report file only. Do NOT echo stdout.
+        if p.returncode in (0, 1) and os.path.exists(report_path):
+            try:
+                with open(report_path) as f:
+                    sys.stdout.write(f.read())
+                return 0
+            except OSError:
+                return 1
+        return p.returncode
+    # --backup-status: the engine keeps stdout pure JSON (logs go to stderr).
+    if p.stdout:
+        sys.stdout.write(p.stdout)
+    return p.returncode
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
+    # read-only verbs (engine needs root for these; closed set, no eval):
+    ap.add_argument("--backup-status", action="store_true")
+    ap.add_argument("--scan-report", action="store_true")
+    ap.add_argument("--host", action="store_true")
+    ap.add_argument("--only", default=None)
     args = ap.parse_args()
     cfg = load_config(args.config)
+    if args.backup_status:
+        return _readonly_run(cfg, [cfg["engine"], "--backup-status"],
+                             None, cfg.get("scan_timeout", 600))
+    if args.scan_report:
+        import tempfile
+        with tempfile.NamedTemporaryFile("r", suffix=".json", delete=False) as tf:
+            rp = tf.name
+        argv = [cfg["engine"], "--scan"]
+        if args.host:
+            argv.append("--host")
+        if args.only is not None:
+            if not GUEST_ID_RE.match(args.only):
+                return 2
+            argv += ["--only", args.only]
+        argv += ["--report", rp]
+        try:
+            return _readonly_run(cfg, argv, rp, cfg.get("scan_timeout", 600))
+        finally:
+            try:
+                os.remove(rp)
+            except OSError:
+                pass
     queue_dir = os.path.join(cfg["store_dir"], "queue")
     pending = sorted(f for f in os.listdir(queue_dir) if f.endswith(".job"))
     for name in pending:

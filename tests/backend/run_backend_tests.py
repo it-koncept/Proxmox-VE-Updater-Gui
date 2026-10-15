@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.join(ROOT, "backend"))
 
 import server as server_mod  # noqa: E402
 import jobs as jobs_mod  # noqa: E402
+import pveauth as pveauth_mod  # noqa: E402
 
 # ---- fake PVE identity fixtures -------------------------------------------
 TICKETS = {
@@ -37,6 +38,12 @@ TICKETS = {
 }
 CSRF = {"t-admin": "csrf-admin", "t-auditor": "csrf-auditor",
         "t-nobody": "csrf-nobody"}
+# realistic ticket shape; fake PVE answers this one like PVE 8.4 does for
+# non-root users: 400 on ?effective=1, plain map on /access/permissions
+PLAIN_TICKET = "PVE:plainuser@pve:1700000000:sig=="
+TICKETS[PLAIN_TICKET] = ("plainuser@pve", {"/nodes": {"Sys.Audit": 1},
+                                           "/vms": {"VM.Audit": 1}})
+CSRF[PLAIN_TICKET] = "csrf-plain"
 
 
 class FakePve(BaseHTTPRequestHandler):
@@ -44,6 +51,24 @@ class FakePve(BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
+        # POST /access/domains — the backend's CSRF probe endpoint. Mirrors
+        # real PVE 8.4: the CSRF guard runs BEFORE permissions/handlers, so
+        # a forged token gets 401 and a valid token gets 403 (Realm.Allocate
+        # denied). /access/csrf_token does not exist on real PVE.
+        if "/access/domains" in self.path:
+            ticket = None
+            for part in (self.headers.get("Cookie") or "").split(";"):
+                k, _, v = part.strip().partition("=")
+                if k == "PVEAuthCookie":
+                    ticket = v
+            hdr = self.headers.get("CSRFPreventionToken")
+            if ticket in CSRF and hdr == CSRF[ticket]:
+                self.send_response(403)
+                self.end_headers()
+            else:
+                self.send_response(401)
+                self.end_headers()
+            return
         # POST /access/ticket — fake PVE credential check (fake passwords,
         # fake tickets; nothing real is ever involved).
         if "/access/ticket" not in self.path:
@@ -92,12 +117,22 @@ class FakePve(BaseHTTPRequestHandler):
             k, _, v = part.strip().partition("=")
             if k == "PVEAuthCookie":
                 ticket = v
+        if ticket == PLAIN_TICKET and "effective=1" in self.path:
+            self.send_response(400)
+            self.end_headers()
+            return
+        if ticket == PLAIN_TICKET and "/access/permissions" in self.path:
+            userid, perms = TICKETS[ticket]
+            self._json({"data": perms})  # plain shape: path -> privs
+            return
         if ticket in TICKETS and "/access/permissions" in self.path:
             userid, perms = TICKETS[ticket]
             self._json({"data": {"userid": userid, "permissions": perms}})
             return
-        if ticket in CSRF and "/access/csrf_token" in self.path:
-            self._json({"data": {"CSRFPreventionToken": CSRF[ticket]}})
+        if "/access/csrf_token" in self.path:
+            # real PVE: GET not implemented (501); POST returns the token
+            self.send_response(501)
+            self.end_headers()
             return
         if ticket in TICKETS and "/nodes/testnode/qemu" in self.path:
             self._json({"data": [{"vmid": 207, "name": "vm-test",
@@ -335,6 +370,22 @@ class BackendTests(unittest.TestCase):
     def test_bad_ticket_rejected(self):
         st, _ = req("GET", "/api/scan", ticket="forged-ticket")
         self.assertEqual(st, 401)
+
+    def test_realistic_ticket_with_base64_padding_accepted(self):
+        # real PVE tickets contain '=' padding; regression for the live bug
+        # where _safe_ticket rejected them (found on test-node, 2026-10-15)
+        real_like = "PVE:test-user@pve:1760000000:abcDEF123=="
+        self.assertTrue(pveauth_mod.PveAuth._safe_ticket(real_like))
+        TICKETS[real_like] = TICKETS["t-auditor"]
+        CSRF[real_like] = "csrf-auditor"
+        st, out = req("GET", "/api/backup-status", ticket=real_like)
+        self.assertEqual(st, 200)
+
+    def test_verify_fallback_plain_permissions_shape(self):
+        # PVE 8.4 answers non-root callers with 400 on ?effective=1; the
+        # fallback to plain /access/permissions must work (found on test-node)
+        st, out = req("GET", "/api/backup-status", ticket=PLAIN_TICKET)
+        self.assertEqual(st, 200)
 
     def test_crlf_ticket_rejected(self):
         # either the HTTP client refuses the malformed header (urllib does)

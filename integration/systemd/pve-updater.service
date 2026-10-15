@@ -9,13 +9,17 @@ Type=simple
 # Unprivileged by design (SEC-004). Root is reached ONLY through the
 # argument-free sudoers rule for the runner. NoNewPrivileges is therefore
 # NOT set (sudo needs setuid); the sudoers line is the containment.
+# NOTE: ProtectSystem=strict was tried and broke the engine: the root runner
+# inherits this sandbox, and lxc-attach/qm-guest-exec need /run writable.
+# 'full' keeps /usr, /boot, /etc read-only, which is the meaningful guard
+# (system binaries and configs cannot be tampered with by the service).
 User=pveupd
 Group=pveupd
 ExecStart=/usr/bin/python3 /opt/pve-updater/backend/server.py --config /etc/pve-updater/config.json
 StateDirectory=pve-updater
 ConfigurationDirectory=pve-updater
-ProtectSystem=strict
-ReadWritePaths=/var/lib/pve-updater
+ProtectSystem=full
+ReadWritePaths=/var/lib/pve-updater /var/lock
 PrivateTmp=yes
 Restart=on-failure
 
