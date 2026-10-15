@@ -1,0 +1,10 @@
+# pve-updater sudoers drop-in.
+# Install: install -m 0440 this file /etc/sudoers.d/pve-updater
+# ALWAYS validate afterwards:  visudo -cf /etc/sudoers.d/pve-updater
+#
+# The backend user may invoke the root runner with NO arguments at all:
+# there is no wildcard on argv, so nothing can be smuggled in. The runner
+# re-validates every job file itself (schema, ids, approval TTL, fingerprint).
+pveupd ALL=(root) NOPASSWD: /usr/local/sbin/pve-updater-runner
+Defaults:pveupd env_reset
+Defaults:pveupd secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"

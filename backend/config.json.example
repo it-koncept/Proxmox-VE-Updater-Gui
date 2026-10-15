@@ -1,0 +1,17 @@
+{
+  "engine": "/usr/local/bin/update-vms.sh",
+  "pve_api_url": "https://localhost:8006/api2/json",
+  "store_dir": "/var/lib/pve-updater",
+  "node": "prod-node",
+  "read_privs": ["VM.Audit", "Sys.Audit"],
+  "update_privs": ["VM.Allocate"],
+  "host_update_privs": ["Sys.Modify"],
+  "approval_ttl_s": 900,
+  "runner_cmd": ["sudo", "/usr/local/sbin/pve-updater-runner"],
+  "scan_timeout": 600,
+  "update_timeout": 7200,
+  "runner_timeout": 7800,
+  "bind": "127.0.0.1",
+  "port": 8765,
+  "engine_version": "3.5.0"
+}

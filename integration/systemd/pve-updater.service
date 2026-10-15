@@ -1,0 +1,23 @@
+[Unit]
+Description=pve-updater GUI backend (narrow API in front of update-vms.sh)
+Documentation=file:/opt/pve-updater/docs/BACKEND.md
+After=network-online.target pve-cluster.service pveproxy.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Unprivileged by design (SEC-004). Root is reached ONLY through the
+# argument-free sudoers rule for the runner. NoNewPrivileges is therefore
+# NOT set (sudo needs setuid); the sudoers line is the containment.
+User=pveupd
+Group=pveupd
+ExecStart=/usr/bin/python3 /opt/pve-updater/backend/server.py --config /etc/pve-updater/config.json
+StateDirectory=pve-updater
+ConfigurationDirectory=pve-updater
+ProtectSystem=strict
+ReadWritePaths=/var/lib/pve-updater
+PrivateTmp=yes
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
