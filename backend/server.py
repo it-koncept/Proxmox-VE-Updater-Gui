@@ -24,6 +24,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -36,13 +37,29 @@ GUEST_ID_RE = re.compile(r"^[0-9]{1,8}$")
 NODE_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 JOBID_RE = re.compile(r"^[0-9a-f-]{36}$")
 
+# static UI assets: fixed map only, never a filesystem walk (no traversal)
+UI_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                       "..", "ui"))
+UI_FILES = {
+    "/": ("index.html", "text/html; charset=utf-8"),
+    "/app.js": ("app.js", "application/javascript; charset=utf-8"),
+    "/style.css": ("style.css", "text/css; charset=utf-8"),
+}
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; "
+       "connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; "
+       "base-uri 'none'; form-action 'self'")
+
 
 class Backend:
     def __init__(self, cfg):
         self.cfg = cfg
-        self.auth = PveAuth(cfg["pve_api_url"])
+        self.auth = PveAuth(cfg["pve_api_url"],
+                            tls_verify=cfg.get("pve_tls_verify", False))
         self.store = jobs_mod.Store(cfg["store_dir"])
         self.submit_lock = threading.Lock()
+        # naive in-memory login throttle: ip -> [fail_count, blocked_until]
+        self.login_guard = {}
+        self.login_guard_lock = threading.Lock()
 
     # ---- engine helpers (fixed argv, no shell) -----------------------------
     def engine(self, args, timeout):
@@ -158,15 +175,60 @@ def make_handler(be):
             return "/vms/" + str(tid)
 
         # ---- routes --------------------------------------------------------
+        def _send_static(self, key):
+            fname, ctype = UI_FILES[key]
+            path = os.path.join(UI_DIR, fname)
+            try:
+                with open(path, "rb") as f:
+                    body = f.read()
+            except OSError:
+                return self._send(404, {"error": "ui asset missing"})
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", CSP)
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self):
             u = urlparse(self.path)
+            if u.path in UI_FILES:
+                return self._send_static(u.path)
             if u.path == "/api/health":
                 return self._send(200, {"status": "ok",
-                                        "engine_version": cfg.get("engine_version", "unknown")})
+                                        "engine_version": cfg.get("engine_version", "unknown"),
+                                        "node": cfg.get("node", "")})
             ident = self._identify()
             if not ident:
                 return
             q = parse_qs(u.query)
+            if u.path == "/api/me":
+                return self._send(200, {"userid": ident["userid"],
+                                        "permissions": ident["permissions"]})
+            if u.path == "/api/guests":
+                node = str(cfg.get("node", ""))
+                if not self._need_priv(ident, "/nodes/" + node,
+                                       cfg["read_privs"], "read permission required"):
+                    return
+                ticket = self._cookie("PVEAuthCookie")
+                guests = []
+                try:
+                    for kind, path in (("qemu", "/qemu"), ("lxc", "/lxc")):
+                        data = be.auth._get("/nodes/" + node + path, ticket)
+                        for row in data.get("data") or []:
+                            if isinstance(row, dict) and row.get("vmid") is not None:
+                                guests.append({
+                                    "type": kind,
+                                    "vmid": row["vmid"],
+                                    "name": str(row.get("name", ""))[:64],
+                                    "status": str(row.get("status", ""))[:24],
+                                    "tags": str(row.get("tags", ""))[:256],
+                                })
+                except Exception:
+                    return self._send(502, {"error": "PVE guest list failed"})
+                return self._send(200, guests)
             if u.path == "/api/scan":
                 ttype = q.get("target_type", [""])[0]
                 tid = q.get("target_id", [""])[0]
@@ -230,13 +292,73 @@ def make_handler(be):
                 return self._send(200, {"job": job, "log_tail": log_tail})
             return self._send(404, {"error": "not found"})
 
+        def _login(self):
+            ip = self.client_address[0]
+            now = time.time()
+            with be.login_guard_lock:
+                rec = be.login_guard.get(ip)
+                if rec and rec[1] and now < rec[1]:
+                    return self._send(429, {"error": "too many failed logins, "
+                                                     "wait before retrying"})
+            body = self._body()
+            if body is None:
+                return self._send(400, {"error": "invalid body"})
+            res = be.auth.login(body.get("username"), body.get("password"),
+                                body.get("realm"), body.get("tfa"),
+                                body.get("tfa_fingerprint"))
+            if isinstance(res, tuple) and res[0] == "tfa":
+                with be.login_guard_lock:
+                    be.login_guard.pop(ip, None)
+                return self._send(200, {"tfa_required": True,
+                                        "tfa_type": res[1]["tfa_type"],
+                                        "tfa_fingerprint": res[1]["tfa_fingerprint"]})
+            if res is None:
+                with be.login_guard_lock:
+                    rec = be.login_guard.setdefault(ip, [0, 0.0])
+                    rec[0] += 1
+                    if rec[0] >= 5:
+                        rec[1] = now + 30
+                return self._send(401, {"error": "invalid credentials"})
+            ticket, csrf, userid = res
+            with be.login_guard_lock:
+                be.login_guard.pop(ip, None)
+            cookie = ("PVEAuthCookie=%s; HttpOnly; SameSite=Strict; Path=/; "
+                      "Max-Age=3600%s" % (ticket,
+                                          "; Secure" if cfg.get("secure_cookies") else ""))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Set-Cookie", cookie)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            payload = json.dumps({"userid": userid, "csrf_token": csrf}).encode()
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def _logout(self):
+            # clears OUR cookie; the PVE ticket itself cannot be revoked
+            # server-side and stays valid at PVE until it expires.
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Set-Cookie", "PVEAuthCookie=; HttpOnly; "
+                           "SameSite=Strict; Path=/; Max-Age=0"
+                           + ("; Secure" if cfg.get("secure_cookies") else ""))
+            body = b'{"status":"logged out locally"}'
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_POST(self):
             u = urlparse(self.path)
+            if u.path == "/api/login":
+                return self._login()
             ident = self._identify()
             if not ident:
                 return
             if not self._csrf(ident):
                 return
+            if u.path == "/api/logout":
+                return self._logout()
             known = ("/api/jobs",)
             if not (u.path in known or
                     re.match(r"^/api/jobs/[0-9a-f-]{36}/(approve|start)$", u.path)):

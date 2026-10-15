@@ -62,9 +62,27 @@ proxy; decision Q8 still open. Never bind a raw HTTP port to a public iface.
   `visudo -cf` at install.
 
 ## Tests
-`python3 tests/backend/run_backend_tests.py` — 24 cases against a fake PVE
-API and a fake engine stub: authN (401s, CRLF), authZ (auditor vs admin,
-host policy), CSRF, injection/bad-enum inputs, approval fingerprint binding,
-stale approval -> blocked, changed preview -> blocked, duplicate target ->
-409, runner tamper rejection, timeout -> interrupted, history/log 0640,
-audit attribution. No real apt/pct/qm/PVE calls.
+`python3 tests/backend/run_backend_tests.py` — 33 cases against a fake PVE
+API and a fake engine stub: authN (401s, CRLF), login relay (wrong pw 401,
+rate-limit 429 after 5 fails, HttpOnly/SameSite=Strict cookie, TFA challenge
+roundtrip), logout cookie clear, authZ (auditor vs admin, host policy), CSRF,
+injection/bad-enum inputs, approval fingerprint binding, stale approval ->
+blocked, changed preview -> blocked, duplicate target -> 409, runner tamper
+rejection, timeout -> interrupted, history/log 0640, audit attribution,
+static UI (CSP header, traversal 404), guest-list proxy. No real apt/pct/qm/
+PVE calls.
+
+`tests/backend/dev_harness.py [port]` — same fakes, fixed port, for manual/
+browser QA of `ui/` (login admin@pve / pw-admin are fake credentials).
+
+## GUI (Phase 3)
+`ui/` is static vanilla JS served by the backend itself (fixed asset map,
+CSP `default-src 'self'`, no inline scripts, all rendering via textContent).
+Flow: login (relayed to PVE /access/ticket; 2FA challenge supported) ->
+guest list proxied through the caller's own PVE ticket (PVE ACLs decide what
+you see) -> per-target scan preview -> job create -> approve by pasting the
+fingerprint -> start -> status polling -> history + log tail.
+Notes: the CSRF token is handed to JS once at login and kept in memory only;
+the session cookie is HttpOnly. Logout clears our cookie — a PVE ticket
+cannot be revoked server-side and stays valid at PVE until expiry.
+Login failures are throttled in memory per IP (5 fails -> 30 s block).

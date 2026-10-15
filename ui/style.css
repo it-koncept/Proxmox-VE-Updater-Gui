@@ -1,0 +1,44 @@
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { font-family: system-ui, sans-serif; margin: 0; background: #181a1f;
+       color: #e6e6e6; }
+header { display: flex; align-items: center; gap: 1rem; padding: .8rem 1.2rem;
+         background: #22262e; }
+header h1 { font-size: 1.1rem; margin: 0; }
+#whoami { margin-left: auto; color: #9ab; }
+main { padding: 1rem 1.2rem; max-width: 1100px; }
+section.card { background: #22262e; border-radius: 8px; padding: 1rem;
+               margin-bottom: 1rem; }
+h2 { font-size: .95rem; margin: 0 0 .6rem; color: #9ab; }
+table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid #333; }
+button { background: #3a6ea5; color: #fff; border: 0; border-radius: 4px;
+         padding: .35rem .8rem; cursor: pointer; }
+button:hover { background: #4a82c0; }
+button.primary { background: #2e7d32; }
+button.primary:hover { background: #3a9a3f; }
+button.danger { background: #a53a3a; }
+button.danger:hover { background: #c04a4a; }
+input { background: #181a1f; color: #e6e6e6; border: 1px solid #444;
+        border-radius: 4px; padding: .35rem; }
+label { display: block; margin-bottom: .5rem; font-size: .9rem; }
+label input { margin-left: .5rem; }
+.hidden { display: none; }
+.muted { color: #8a93a0; }
+.error { color: #ff7b7b; }
+.warn { color: #ffc07b; }
+.ok { color: #7bd98a; }
+.fp { font-family: monospace; font-size: .8rem; word-break: break-all; }
+ul.pkgs { font-size: .85rem; columns: 3; }
+pre.log { background: #101216; padding: .6rem; border-radius: 4px;
+          font-size: .8rem; white-space: pre-wrap; max-height: 24rem;
+          overflow-y: auto; }
+.status-succeeded { color: #7bd98a; }
+.status-failed, .status-blocked, .status-interrupted { color: #ff7b7b; }
+.status-awaiting_approval, .status-approved, .status-running,
+.status-queued, .status-validating, .status-scanning, .status-verifying,
+.status-partial { color: #ffc07b; }
+.status-cancelled, .status-unsupported { color: #8a93a0; }
+footer { padding: .6rem 1.2rem; color: #8a93a0; font-size: .8rem; }
+#banner div { padding: .4rem .6rem; border-radius: 4px; margin-bottom: .6rem;
+              background: #22262e; }

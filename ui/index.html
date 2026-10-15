@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PVE Updater</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>PVE Updater</h1>
+  <div id="whoami"></div>
+  <button id="btn-logout" class="hidden">Log out</button>
+</header>
+
+<section id="login">
+  <h2>Login with your Proxmox VE credentials</h2>
+  <p class="muted">PVE is the only identity store; this page never stores a password.</p>
+  <form id="login-form">
+    <label>Username <input id="l-user" autocomplete="username" required></label>
+    <label>Realm <input id="l-realm" value="pve" size="6"></label>
+    <label>Password <input id="l-pass" type="password" autocomplete="current-password" required></label>
+    <label id="tfa-row" class="hidden">2FA code <input id="l-tfa" inputmode="numeric"></label>
+    <button type="submit">Login</button>
+    <div id="login-msg" class="error"></div>
+  </form>
+</section>
+
+<main id="app" class="hidden">
+  <div id="banner"></div>
+
+  <section class="card">
+    <h2>Targets</h2>
+    <table id="guests">
+      <thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Status</th><th>Tags</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="host-row"></div>
+  </section>
+
+  <section class="card">
+    <h2>Active job</h2>
+    <div id="active-job"><p class="muted">none</p></div>
+  </section>
+
+  <section class="card">
+    <h2>History</h2>
+    <table id="history">
+      <thead><tr><th>When</th><th>Target</th><th>Op</th><th>Status</th><th>Actor</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="job-detail"></div>
+  </section>
+</main>
+
+<footer><span id="engine-info" class="muted"></span></footer>
+<script src="/app.js"></script>
+</body>
+</html>

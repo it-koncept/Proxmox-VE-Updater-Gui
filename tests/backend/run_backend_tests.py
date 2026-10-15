@@ -43,6 +43,48 @@ class FakePve(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def do_POST(self):
+        # POST /access/ticket — fake PVE credential check (fake passwords,
+        # fake tickets; nothing real is ever involved).
+        if "/access/ticket" not in self.path:
+            self.send_response(404)
+            self.end_headers()
+            return
+        n = int(self.headers.get("Content-Length", "0"))
+        try:
+            body = json.loads(self.rfile.read(n).decode())
+        except Exception:
+            body = {}
+        user, pw = body.get("username"), body.get("password")
+        if user == "admin@pve" and pw == "pw-admin":
+            self._json({"data": {"ticket": "t-admin",
+                                 "CSRFPreventionToken": "csrf-admin",
+                                 "username": "admin@pve"}})
+        elif user == "tfauser@pve" and pw == "pw-tfa":
+            tfa = body.get("tfa-challenge")
+            if tfa and tfa.get("response") == "123456":
+                self._json({"data": {"ticket": "t-admin",
+                                     "CSRFPreventionToken": "csrf-admin",
+                                     "username": "admin@pve"}})
+            else:
+                self._json({"data": {"tfa-fingerprint": "fake-fp",
+                                     "tfa-challenge": {"tfa-type": "totp"}}})
+        else:
+            self.send_response(401)
+            self.send_header("Content-Type", "application/json")
+            body = b'{"data":null}'
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    def _json(self, obj):
+        body = json.dumps(obj).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         cookie = self.headers.get("Cookie", "")
         ticket = None
@@ -52,19 +94,21 @@ class FakePve(BaseHTTPRequestHandler):
                 ticket = v
         if ticket in TICKETS and "/access/permissions" in self.path:
             userid, perms = TICKETS[ticket]
-            body = json.dumps({"data": {"userid": userid,
-                                        "permissions": perms}}).encode()
-        elif ticket in CSRF and "/access/csrf_token" in self.path:
-            body = json.dumps({"data": {"CSRFPreventionToken": CSRF[ticket]}}).encode()
-        else:
-            self.send_response(401)
-            self.end_headers()
+            self._json({"data": {"userid": userid, "permissions": perms}})
             return
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
+        if ticket in CSRF and "/access/csrf_token" in self.path:
+            self._json({"data": {"CSRFPreventionToken": CSRF[ticket]}})
+            return
+        if ticket in TICKETS and "/nodes/testnode/qemu" in self.path:
+            self._json({"data": [{"vmid": 207, "name": "vm-test",
+                                  "status": "running", "tags": "apt"}]})
+            return
+        if ticket in TICKETS and "/nodes/testnode/lxc" in self.path:
+            self._json({"data": [{"vmid": 107, "name": "ct-test",
+                                  "status": "running", "tags": "apt"}]})
+            return
+        self.send_response(401)
         self.end_headers()
-        self.wfile.write(body)
 
 
 TMP = tempfile.mkdtemp(prefix="pvub-test-")
@@ -156,9 +200,107 @@ def full_job(target_type="lxc", target_id="107", operation="update"):
     return job["job_id"]
 
 
+def req2_logout():
+    r = urllib.request.Request(BASE + "/api/logout", data=b"{}", method="POST")
+    r.add_header("Cookie", "PVEAuthCookie=t-admin")
+    r.add_header("CSRFPreventionToken", "csrf-admin")
+    r.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(r, timeout=10) as resp:
+            return resp.status, {}, resp.headers.get("Set-Cookie", "")
+    except urllib.error.HTTPError as e:
+        return e.code, {}, ""
+
+
 class BackendTests(unittest.TestCase):
     def setUp(self):
         set_mode("normal")
+
+    # ---- login relay (SEC-001: PVE is the only identity store) ---------------
+    def _login(self, user, pw, tfa=None, fp=None):
+        body = {"username": user, "password": pw, "realm": "pve"}
+        if tfa:
+            body["tfa"] = tfa
+            body["tfa_fingerprint"] = fp
+        r = urllib.request.Request(BASE + "/api/login",
+                                   data=json.dumps(body).encode(), method="POST")
+        r.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(r, timeout=10) as resp:
+                return resp.status, json.loads(resp.read().decode()), \
+                    resp.headers.get("Set-Cookie", "")
+        except urllib.error.HTTPError as e:
+            return e.code, {}, ""
+
+    def test_login_wrong_password_401(self):
+        st, _, cookie = self._login("admin@pve", "wrong")
+        self.assertEqual(st, 401)
+        self.assertEqual(cookie, "")
+
+    def test_login_rate_limits_after_five_failures(self):
+        for _ in range(5):
+            self._login("admin@pve", "wrong")
+        st, _, _ = self._login("admin@pve", "pw-admin")
+        self.assertEqual(st, 429)
+        BE.login_guard.clear()  # unblock later tests
+
+    def test_login_success_sets_httponly_cookie_and_returns_csrf(self):
+        st, out, cookie = self._login("admin@pve", "pw-admin")
+        self.assertEqual(st, 200)
+        self.assertEqual(out["userid"], "admin@pve")
+        self.assertEqual(out["csrf_token"], "csrf-admin")
+        self.assertIn("PVEAuthCookie=t-admin", cookie)
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("SameSite=Strict", cookie)
+        # the returned ticket+csrf work end-to-end against the real backend
+        st, out = req("GET", "/api/me", ticket="t-admin")
+        self.assertEqual(st, 200)
+        self.assertEqual(out["userid"], "admin@pve")
+
+    def test_login_tfa_challenge_roundtrip(self):
+        st, out, _ = self._login("tfauser@pve", "pw-tfa")
+        self.assertEqual(st, 200)
+        self.assertTrue(out.get("tfa_required"))
+        st, out, cookie = self._login("tfauser@pve", "pw-tfa",
+                                      {"type": "totp", "response": "123456"},
+                                      "fake-fp")
+        self.assertEqual(st, 200)
+        self.assertIn("PVEAuthCookie=t-admin", cookie)
+
+    def test_logout_clears_cookie(self):
+        st, _, cookie = req2_logout()
+        self.assertEqual(st, 200)
+        self.assertIn("Max-Age=0", cookie)
+
+    # ---- static UI (no traversal, CSP present) -------------------------------
+    def test_index_served_with_csp(self):
+        with urllib.request.urlopen(BASE + "/", timeout=10) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertIn("text/html", resp.headers.get("Content-Type", ""))
+            self.assertIn("default-src 'self'",
+                          resp.headers.get("Content-Security-Policy", ""))
+            body = resp.read().decode()
+        self.assertIn("/app.js", body)
+
+    def test_unknown_and_traversal_paths_404(self):
+        for p in ("/../backend/server.py", "/ui/index.html", "/etc/passwd"):
+            try:
+                st, _ = req("GET", p, ticket="t-admin")
+            except urllib.error.HTTPError as e:
+                st = e.code
+            self.assertEqual(st, 404, p)
+
+    # ---- guest list proxy (uses caller's own PVE permissions) -----------------
+    def test_guests_list_for_admin(self):
+        st, out = req("GET", "/api/guests", ticket="t-admin")
+        self.assertEqual(st, 200)
+        ids = {(g["type"], g["vmid"]) for g in out}
+        self.assertIn(("lxc", 107), ids)
+        self.assertIn(("qemu", 207), ids)
+
+    def test_guests_forbidden_without_read(self):
+        st, _ = req("GET", "/api/guests", ticket="t-nobody")
+        self.assertEqual(st, 403)
 
     # ---- authentication ----------------------------------------------------
     def test_health_public(self):
