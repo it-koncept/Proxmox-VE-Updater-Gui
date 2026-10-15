@@ -7,23 +7,33 @@ argv wildcards).
 
 ## Components
 - `backend/server.py` — ThreadingHTTPServer with a closed verb set:
-  `scan`, `backup-status`, `jobs` (read); `jobs create/approve/start` (update).
+  `scan`, `backup-status`, `jobs` (read); `jobs create/approve/start/cancel`
+  (update). `require_approval` (config, default false): with false a created
+  job is `ready` and starts directly; with true the two-step
+  approve->start flow with approval TTL applies. The fingerprint is an
+  audit identifier only — no echo confirmation, no blocking on preview
+  drift (maintainer decision, v0.9.0-11).
   No endpoint accepts a command, path, or shell fragment — only typed
   target ids (`^[0-9]{1,8}$` / node name regex) and enum operations.
 - `backend/pveauth.py` — PVE is the identity store: the caller's
-  `PVEAuthCookie` ticket is verified by calling PVE's own
-  `/access/permissions?effective=1`; the same response drives server-side
+  `PVEAuthCookie` ticket is verified against PVE's `/access/permissions`
+  (`?effective=1` when accepted, plain map otherwise — PVE 8.4 answers
+  400 for non-root callers); the same response drives server-side
   authorization (read vs update privileges per target path). CSRF writes
-  must echo PVE's `CSRFPreventionToken` for that ticket. API tokens are not
-  accepted from browsers.
+  are verified through PVE's own CSRF guard (POST probe: forged token ->
+  401, valid -> 403/400; PVE 8.4 has no /access/csrf_token endpoint).
+  API tokens are not accepted from browsers.
 - `backend/jobs.py` — sqlite history (`history.db`, 0640) + audit table;
   job state machine per SPEC §6; unique partial index = one active job per
-  target; approval bound to preview fingerprint with TTL.
-- `backend/runner.py` — the ONLY root-side component. Invoked with zero
-  arguments via sudoers. Re-validates every job file (strict schema, numeric
-  ids, operation allowlist, approval TTL), re-runs the scan and compares the
-  fingerprint (stale preview -> `blocked`), then execs the Bash engine with a
-  fixed argv list. Timeouts -> `interrupted`, never `succeeded`.
+  target; approval TTL when `require_approval` is on.
+- `backend/runner.py` — the ONLY root-side component. Invoked via a
+  no-argument sudoers rule (the runner itself enforces its closed verb
+  set: queue processing plus read-only `--scan-report`/`--backup-status`).
+  Re-validates every job file (strict schema, numeric ids, operation
+  allowlist, approval TTL when required), then execs the Bash engine with
+  a fixed argv list. Timeouts -> `interrupted`, never `succeeded`.
+  Result/log files are chgrp'd to the queue/log dir's group so the
+  unprivileged backend can read them (v0.9.0-11 fix).
 
 ## Trust boundaries
 browser (untrusted) -> server.py (authN/authZ/validation) -> queue file
@@ -62,12 +72,14 @@ proxy; decision Q8 still open. Never bind a raw HTTP port to a public iface.
   `visudo -cf` at install.
 
 ## Tests
-`python3 tests/backend/run_backend_tests.py` — 43 cases against a fake PVE
+`python3 tests/backend/run_backend_tests.py` — 48 cases against a fake PVE
 API and a fake engine stub: authN (401s, CRLF), login relay (wrong pw 401,
 rate-limit 429 after 5 fails, HttpOnly/SameSite=Strict cookie, TFA challenge
-roundtrip), logout cookie clear, authZ (auditor vs admin, host policy), CSRF,
-injection/bad-enum inputs, approval fingerprint binding, stale approval ->
-blocked, changed preview -> blocked, duplicate target -> 409, runner tamper
+roundtrip), logout cookie clear, authZ (auditor vs admin, host policy), CSRF
+(verified through PVE's own guard, mirroring real 401/403 behavior),
+injection/bad-enum inputs, approval TTL -> blocked, changed preview still
+runs (no fingerprint blocking, v0.9.0-11), require_approval=false direct
+start, cancel frees target, duplicate target -> 409, runner tamper
 rejection, timeout -> interrupted, history/log 0640, audit attribution,
 static UI (CSP header, traversal 404), guest-list proxy. No real apt/pct/qm/
 PVE calls.
@@ -136,8 +148,10 @@ qemu-guest-agent inside a guest (production change, needs maintainer go).
 CSP `default-src 'self'`, no inline scripts, all rendering via textContent).
 Flow: login (relayed to PVE /access/ticket; 2FA challenge supported) ->
 guest list proxied through the caller's own PVE ticket (PVE ACLs decide what
-you see) -> per-target scan preview -> job create -> approve by pasting the
-fingerprint -> start -> status polling -> history + log tail.
+you see) -> per-target scan preview -> job create -> (approve when
+require_approval=true) -> start -> status polling -> history + log tail;
+Cancel is available on ready/awaiting/approved jobs. No fingerprint echo
+(removed v0.9.0-11).
 Notes: the CSRF token is handed to JS once at login and kept in memory only;
 the session cookie is HttpOnly. Logout clears our cookie — a PVE ticket
 cannot be revoked server-side and stays valid at PVE until expiry.

@@ -10,8 +10,9 @@ Endpoints (closed set):
   GET  /api/jobs[?limit&target_id] history (read verb)
   GET  /api/jobs/<id>              job detail + log tail (read verb)
   POST /api/jobs                   create job (update verb, CSRF)
-  POST /api/jobs/<id>/approve      approve job (update verb, CSRF)
+  POST /api/jobs/<id>/approve      approve job (only when require_approval)
   POST /api/jobs/<id>/start        run job via root runner (update verb, CSRF)
+  POST /api/jobs/<id>/cancel       cancel a not-yet-running job (CSRF)
 
 Auth: PVEAuthCookie ticket verified against the PVE API (SEC-001/002).
 CSRF: CSRFPreventionToken header must equal PVE's token for the ticket
