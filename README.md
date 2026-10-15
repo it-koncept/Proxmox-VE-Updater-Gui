@@ -1,39 +1,41 @@
-# Proxmox VE Updater — GUI v2 development pack
+# Proxmox VE Updater — GUI
 
-This pack defines the next development stage for `it-koncept/Proxmox-VE-Updater-`: an integration shown in the Proxmox VE web interface, backed by the existing Bash updater.
+Web UI + REST API companion for the [Proxmox VE Updater Bash engine](https://github.com/it-koncept/Proxmox-VE-Updater-).
+Scan, preview and run guest/host updates from a browser — while the proven
+Bash engine stays the only thing that touches your guests.
 
-## Important
-- This is a **development specification**, not an installable plugin or production code.
-- The agent must inspect the current repository and supported Proxmox VE versions before choosing an integration mechanism.
-- Do not patch Proxmox's shipped GUI files as the default approach. Treat any unsupported GUI extension mechanism as a compatibility risk and document it.
-- Never run real updates, reboot hosts, or modify a production Proxmox node during analysis or mock testing.
-- Keep the existing CLI and scheduled execution usable.
-- Use mock-based tests; no network access or package installation is required for unit tests.
+## What you get
+- Live guest list, per-guest update preview, backup-coverage check
+- One-click update jobs with protected history, logs and audit trail
+- Login with your existing PVE account (ticket + CSRF); role-based authZ
+  (read-only vs update privileges)
+- Unprivileged service; updates execute via a narrow, argument-less
+  root-runner sudoers rule
+- `require_approval` mode (default off) for two-step approve→start
 
-## Contents
-- `SPEC.md` — functional and security requirements.
-- `ARCHITECTURE.md` — target architecture and integration decision gate.
-- `IMPLEMENTATION_PLAN.md` — staged build plan and acceptance criteria.
-- `TESTING.md` — mock-based test strategy.
-- `AGENTS.md` — persistent instructions for Hermes Agent.
-- `HERMES_QWEN_PROMPT.md` — copy/paste initial task for Hermes Agent using the configured Qwen model.
-- `ollama-check.sh` — harmless check of local Ollama/model inventory.
+## Install
+On the PVE node (see [docs/INSTALL.md](docs/INSTALL.md) for details):
 
-## Suggested workflow
-1. Extract this pack next to or into a documentation folder in the repository.
-2. Review `SPEC.md`.
-3. Open Hermes Agent in the repository with the intended Qwen model selected.
-4. Paste the full contents of `HERMES_QWEN_PROMPT.md`.
-5. Let the agent complete **Phase 0 only** and review its report before approving implementation.
-6. Use a disposable Debian development VM and a separate Proxmox test node for integration tests.
+    curl -fsSL https://raw.githubusercontent.com/it-koncept/Proxmox-VE-Updater-Gui/main/install.sh -o install.sh
+    less install.sh   # review before running
+    sudo bash install.sh
 
-## Model name
-The model label “Qwen 3.8 Flash” may be a UI/display label rather than an Ollama model identifier. If using Ollama, run `ollama list` and configure Hermes with the exact model/provider identifier available in your setup. Do not change model configuration automatically.
+Then tunnel to the UI: `ssh -L 8765:127.0.0.1:8765 root@<node>` →
+http://localhost:8765/
 
-## First release scope
-- Scan for updates on the Proxmox host, supported LXC containers, and supported QEMU/KVM guests.
-- Preview changes and require explicit authorization before modifying systems.
-- Check backup status only; do not create backups automatically.
-- Keep a protected history of scans and update jobs.
-- CLI and scheduled mode remain supported.
-- Cluster-wide orchestration is explicitly deferred.
+Prebuilt `.deb` assets are on the [Releases](../../releases) page.
+
+## Docs
+- [docs/INSTALL.md](docs/INSTALL.md) — install, config reference, roles, uninstall
+- [docs/BACKEND.md](docs/BACKEND.md) — architecture, API, security model
+- [docs/PHASE0-AUDIT.md](docs/PHASE0-AUDIT.md) — original integration audit
+- `SPEC.md` / `ARCHITECTURE.md` / `IMPLEMENTATION_PLAN.md` / `TESTING.md` —
+  development specification this project was built from
+
+## Development
+    python3 tests/backend/run_backend_tests.py   # 48 tests, fake PVE + fake engine
+    ./packaging/build_deb.sh                     # build the .deb (rootless)
+
+## Status
+Live-tested on a production PVE 8.4 node (login, scan, backup-status,
+update jobs, cancel). See the releases for the change history.
