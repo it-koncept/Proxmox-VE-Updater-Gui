@@ -38,17 +38,20 @@ fi
 i=$(idx_of --report)
 if [ "$i" -ge 0 ]; then
     rp="${args[$((i+1))]}"
+    # real engines list EVERY guest: non-targets appear as skipped entries.
+    SKIP=',{"vmid":998,"status":"skipped","reason":"not in --only list"},{"vmid":999,"status":"skipped","reason":"not in --only list"}'
+    j=$(idx_of --only); if [ "$j" -ge 0 ]; then tid="${args[$((j+1))]}"; else tid=107; fi
     case "$mode" in
-        fail)      printf '{"mode":"update","guests":[{"vmid":107,"status":"failed"}]}\n' > "$rp"; exit 1 ;;
+        fail)      printf '{"mode":"update","guests":[{"vmid":%s,"status":"failed"}%s]}\n' "$tid" "$SKIP" > "$rp"; exit 1 ;;
         preflight) echo "preflight error" >&2; exit 2 ;;
         lock)      echo "another run holds the lock" >&2; exit 3 ;;
-        skip)      printf '{"mode":"update","guests":[{"vmid":107,"status":"skipped"}]}\n' > "$rp"; exit 0 ;;
-        warn)      printf '{"mode":"update","guests":[{"vmid":107,"status":"warning"}]}\n' > "$rp"; exit 0 ;;
+        skip)      printf '{"mode":"update","guests":[{"vmid":%s,"status":"skipped"}%s]}\n' "$tid" "$SKIP" > "$rp"; exit 0 ;;
+        warn)      printf '{"mode":"update","guests":[{"vmid":%s,"status":"warning"}%s]}\n' "$tid" "$SKIP" > "$rp"; exit 0 ;;
     esac
     if has --host; then
-        printf '{"mode":"host-update","guests":[{"vmid":0,"status":"success"}]}\n' > "$rp"
+        printf '{"mode":"host-update","guests":[{"vmid":"host","type":"host","status":"success"}]}\n' > "$rp"
         exit 0
     fi
-    printf '{"mode":"update","guests":[{"vmid":107,"status":"success"}]}\n' > "$rp"
+    printf '{"mode":"update","guests":[{"vmid":%s,"status":"success"}%s]}\n' "$tid" "$SKIP" > "$rp"
 fi
 exit 0

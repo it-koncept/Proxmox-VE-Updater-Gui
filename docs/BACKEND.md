@@ -12,7 +12,7 @@ argv wildcards).
   job is `ready` and starts directly; with true the two-step
   approve->start flow with approval TTL applies. The fingerprint is an
   audit identifier only — no echo confirmation, no blocking on preview
-  drift (maintainer decision, v0.9.0-11).
+  drift (maintainer decision, v0.9.0-12).
   No endpoint accepts a command, path, or shell fragment — only typed
   target ids (`^[0-9]{1,8}$` / node name regex) and enum operations.
 - `backend/pveauth.py` — PVE is the identity store: the caller's
@@ -33,7 +33,7 @@ argv wildcards).
   allowlist, approval TTL when required), then execs the Bash engine with
   a fixed argv list. Timeouts -> `interrupted`, never `succeeded`.
   Result/log files are chgrp'd to the queue/log dir's group so the
-  unprivileged backend can read them (v0.9.0-11 fix).
+  unprivileged backend can read them (v0.9.0-12 fix).
 
 ## Trust boundaries
 browser (untrusted) -> server.py (authN/authZ/validation) -> queue file
@@ -78,7 +78,7 @@ rate-limit 429 after 5 fails, HttpOnly/SameSite=Strict cookie, TFA challenge
 roundtrip), logout cookie clear, authZ (auditor vs admin, host policy), CSRF
 (verified through PVE's own guard, mirroring real 401/403 behavior),
 injection/bad-enum inputs, approval TTL -> blocked, changed preview still
-runs (no fingerprint blocking, v0.9.0-11), require_approval=false direct
+runs (no fingerprint blocking, v0.9.0-12), require_approval=false direct
 start, cancel frees target, duplicate target -> 409, runner tamper
 rejection, timeout -> interrupted, history/log 0640, audit attribution,
 static UI (CSP header, traversal 404), guest-list proxy. No real apt/pct/qm/
@@ -112,7 +112,7 @@ file replacement. postrm purge deliberately KEEPS `/var/lib/pve-updater`
 is a documented manual step after review.
 
 Install (on a PVE node, maintainer-approved): `apt install
-./pve-updater_0.9.0-11_all.deb`. Upgrade: same command; conffile prompts
+./pve-updater_0.9.0-12_all.deb`. Upgrade: same command; conffile prompts
 protect local config/sudoers. Uninstall: `apt purge pve-updater` (audit data
 kept by design). Recovery: engine CLI + its systemd timer keep working even
 with the package removed; nothing PVE-owned is ever patched
@@ -151,7 +151,7 @@ guest list proxied through the caller's own PVE ticket (PVE ACLs decide what
 you see) -> per-target scan preview -> job create -> (approve when
 require_approval=true) -> start -> status polling -> history + log tail;
 Cancel is available on ready/awaiting/approved jobs. No fingerprint echo
-(removed v0.9.0-11).
+(removed v0.9.0-12).
 Notes: the CSRF token is handed to JS once at login and kept in memory only;
 the session cookie is HttpOnly. Logout clears our cookie — a PVE ticket
 cannot be revoked server-side and stays valid at PVE until expiry.

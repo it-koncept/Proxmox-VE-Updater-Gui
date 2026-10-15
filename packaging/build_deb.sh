@@ -7,7 +7,7 @@ set -eu
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 ENGINE="${1:-$ROOT/../Proxmox-VE-Updater/update-vms.sh}"
-VERSION="0.9.0-11"
+VERSION="0.9.0-12"
 REQ_ENGINE_VERSION="3.5.0"
 
 # --- pin the engine: refuse to package an unexpected version ----------------

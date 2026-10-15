@@ -149,18 +149,44 @@ def write_result(queue_dir, job_id, status, exit_code=None, error=None,
         os.chmod(lp, 0o640)
 
 
-def map_engine_status(rc, report_path):
-    """Map engine rc + per-guest report statuses to a job status.
+def map_engine_status(rc, report_path, target_type=None, target_id=None):
+    """Map engine rc + the JOB'S OWN target entry in the report to a status.
+
     Engine contract: 0 ok, 1 guest failure(s), 2 preflight, 3 lock busy.
-    A guest that was SKIPPED (no agent, target locked, disk gate) must never
-    be recorded as succeeded even when rc==0."""
+    The real engine's report lists EVERY guest (targets not selected via
+    --only appear as 'skipped - not in --only list'); judging on the whole
+    list made every single-guest job 'partial' (found live on test-node).
+    Therefore: find the entry for this job's target and map its status:
+      success -> succeeded | warning -> partial | failed -> failed
+      skipped -> unsupported (no agent, locked, disk gate)
+    If the target entry is missing (engine died early), fall back to the
+    rc contract + aggregate view.
+    """
     try:
         with open(report_path) as f:
             rep = json.load(f)
-        sts = [str(g.get("status", "")) for g in rep.get("guests", [])
-               if isinstance(g, dict)]
+        guests = [g for g in rep.get("guests", []) if isinstance(g, dict)]
     except Exception:
-        sts = []
+        guests = []
+    entry = None
+    if target_type == "host":
+        entry = next((g for g in guests
+                      if str(g.get("vmid")) == "host"
+                      or str(g.get("type")) == "host"), None)
+    elif target_id is not None:
+        entry = next((g for g in guests
+                      if str(g.get("vmid")) == str(target_id)), None)
+    if entry is not None:
+        st = str(entry.get("status", ""))
+        if st in ("success", "planned"):
+            return "succeeded"
+        if st == "warning":
+            return "partial"
+        if st == "failed":
+            return "failed"
+        if st == "skipped":
+            return "unsupported"
+    sts = [str(g.get("status", "")) for g in guests]
     if sts:
         if "failed" in sts:
             return "failed"
@@ -215,7 +241,8 @@ def process_job(cfg, queue_dir, path):
         write_result(queue_dir, job_id, "failed", error=f"exec: {e}")
         return
     log_text = (p.stdout or "") + "\n" + (p.stderr or "")
-    status = map_engine_status(p.returncode, report)
+    status = map_engine_status(p.returncode, report,
+                               doc["target_type"], doc["target_id"])
     write_result(queue_dir, job_id, status, exit_code=p.returncode,
                  error=None if p.returncode == 0 else f"engine rc={p.returncode}",
                  log_text=log_text)
