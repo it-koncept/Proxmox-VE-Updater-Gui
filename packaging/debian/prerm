@@ -1,0 +1,10 @@
+#!/bin/bash
+# prerm for pve-updater: stop the UI service before files are replaced/removed.
+set -eu
+case "${1:-}" in
+    remove|upgrade|deconfigure)
+        systemctl stop pve-updater.service 2>/dev/null || true
+        systemctl disable pve-updater.service 2>/dev/null || true
+        ;;
+esac
+exit 0

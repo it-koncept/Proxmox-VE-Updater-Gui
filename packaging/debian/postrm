@@ -1,0 +1,19 @@
+#!/bin/bash
+# postrm for pve-updater.
+# Deliberate choice: purge does NOT delete /var/lib/pve-updater (sqlite job
+# history + per-job logs are audit data) and does NOT remove the service
+# account. Remove those by hand after reviewing them:
+#   rm -rf /var/lib/pve-updater
+#   userdel pveupd; groupdel pveupd
+set -eu
+case "${1:-}" in
+    purge)
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl reset-failed pve-updater.service 2>/dev/null || true
+        echo "pve-updater: purged. Audit data kept in /var/lib/pve-updater" \
+             "(remove manually after review); user pveupd kept."
+        ;;
+    failed-upgrade)
+        ;;
+esac
+exit 0

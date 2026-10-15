@@ -75,6 +75,44 @@ PVE calls.
 `tests/backend/dev_harness.py [port]` — same fakes, fixed port, for manual/
 browser QA of `ui/` (login admin@pve / pw-admin are fake credentials).
 
+## Packaging (Phase 6)
+`packaging/build_deb.sh` builds `pve-updater_<ver>_all.deb` WITHOUT root
+(`dpkg-deb --root-owner-group`). It refuses to build unless the engine at
+`../Proxmox-VE-Updater/update-vms.sh` reports the pinned version (v3.5.0),
+so a package can never ship an untested engine. Layout:
+- `/usr/local/bin/update-vms.sh` — engine v3.5.0 (the only package-mutating
+  component; the pre-existing `/root/update-vms.sh` is NOT touched — the
+  config's `engine` path decides which one runs)
+- `/usr/local/sbin/pve-updater-runner` — root runner (sudoers target)
+- `/opt/pve-updater/{backend,ui,docs}` — backend + static UI + docs
+- `/etc/pve-updater/config.json`, `/etc/sudoers.d/pve-updater` — conffiles
+  (dpkg prompts on upgrade; local edits are never silently discarded)
+- `/etc/systemd/system/pve-updater.service` — replaced on upgrade, then
+  `daemon-reload`
+
+postinst (idempotent): creates system user/group `pveupd`, state dir 0750,
+fills `node` from hostname on first install, sets config 0640 root:pveupd,
+sudoers 0440 root:root + **aborts the install if `visudo -cf` fails**,
+verifies the packaged engine answers `--version`, enables the unit, restarts
+only if it was already running. prerm stops/disables the service before
+file replacement. postrm purge deliberately KEEPS `/var/lib/pve-updater`
+(sqlite job history + logs are audit data) and the service account; removal
+is a documented manual step after review.
+
+Install (on a PVE node, maintainer-approved): `apt install
+./pve-updater_0.9.0-1_all.deb`. Upgrade: same command; conffile prompts
+protect local config/sudoers. Uninstall: `apt purge pve-updater` (audit data
+kept by design). Recovery: engine CLI + its systemd timer keep working even
+with the package removed; nothing PVE-owned is ever patched
+(`dpkg -V pve-manager proxmox-widget-toolkit` stays clean).
+
+Verified in this phase: deb builds reproducibly from a clean tree, archive
+listing shows correct modes/ownership (dirs 0755, sudoers 0440 via
+postinst, engine+runner executable), packaged config.json is valid JSON,
+maintainer scripts pass `bash -n` + ShellCheck. NOT yet verified: an actual
+install on a PVE node (needs maintainer go; postinst paths depend on
+root-only tools that cannot run on the dev box).
+
 ## QEMU/KVM guests (Phase 5)
 Execution inside QEMU guests goes through `qm guest exec`, which requires a
 RESPONDING qemu-guest-agent (installed in the guest OS AND `agent: 1` in the

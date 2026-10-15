@@ -1,0 +1,17 @@
+Package: pve-updater
+Version: 0.9.0-1
+Section: admin
+Priority: optional
+Architecture: all
+Depends: python3 (>= 3.9), sudo, adduser
+Maintainer: it-koncept <it-koncept@users.noreply.github.com>
+Homepage: https://github.com/it-koncept/Proxmox-VE-Updater-Gui
+Description: GUI companion for the Proxmox VE guest updater (Bash engine)
+ A narrow, authenticated web UI and job backend in front of update-vms.sh.
+ The Bash engine remains the only component that changes packages; the
+ backend only validates, queues and audits. Auth is delegated to the
+ Proxmox VE REST API (tickets + CSRF + PVE ACLs); the root-side runner is
+ invoked through an argument-free sudoers rule and re-validates every job.
+ .
+ This package is pre-release (0.x): production installs require maintainer
+ approval. It never patches any Proxmox VE GUI file.

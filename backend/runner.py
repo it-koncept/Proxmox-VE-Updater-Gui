@@ -22,7 +22,12 @@ import re
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+# dev checkout: jobs.py sits next to runner.py; packaged layout: runner is
+# /usr/local/sbin/pve-updater-runner and jobs.py lives in /opt/pve-updater/backend
+for _p in (_HERE, "/opt/pve-updater/backend"):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 from jobs import fingerprint  # noqa: E402
 
 GUEST_ID_RE = re.compile(r"^[0-9]{1,8}$")

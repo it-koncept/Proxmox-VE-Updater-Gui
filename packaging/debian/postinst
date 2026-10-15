@@ -1,0 +1,62 @@
+#!/bin/bash
+# postinst for pve-updater. Never runs updates, never touches PVE GUI files.
+# Idempotent: safe on install and upgrade (dpkg "configure" step).
+set -eu
+
+PKG_USER=pveupd
+PKG_GROUP=pveupd
+STATE_DIR=/var/lib/pve-updater
+CONF=/etc/pve-updater/config.json
+SUDOERS=/etc/sudoers.d/pve-updater
+
+# --- service account (no login shell, no password) --------------------------
+if ! getent group "$PKG_GROUP" >/dev/null 2>&1; then
+    groupadd --system "$PKG_GROUP"
+fi
+if ! id "$PKG_USER" >/dev/null 2>&1; then
+    useradd --system --gid "$PKG_GROUP" --home-dir "$STATE_DIR" \
+        --shell /usr/sbin/nologin "$PKG_USER"
+fi
+
+# --- state dir (queue, sqlite history, logs) --------------------------------
+install -d -m 0750 -o "$PKG_USER" -g "$PKG_GROUP" "$STATE_DIR"
+
+# --- config: fill in node name on first install, tighten perms ---------------
+if grep -q '"node": "CHANGE_ME"' "$CONF" 2>/dev/null; then
+    node="$(hostname)"
+    sed -i "s/\"node\": \"CHANGE_ME\"/\"node\": \"$node\"/" "$CONF"
+fi
+chown root:"$PKG_GROUP" "$CONF"
+chmod 0640 "$CONF"
+
+# --- sudoers drop-in: correct mode + refuse to proceed on syntax error -------
+chown root:root "$SUDOERS"
+chmod 0440 "$SUDOERS"
+if command -v visudo >/dev/null 2>&1; then
+    if ! visudo -cf "$SUDOERS"; then
+        echo "pve-updater: sudoers drop-in failed visudo validation;" \
+             "the file was NOT enabled. Fix it and re-run:" \
+             "install -m 0440 /usr/share/pve-updater/sudoers.d.pve-updater $SUDOERS" >&2
+        exit 1
+    fi
+else
+    echo "pve-updater: visudo not found; cannot validate sudoers drop-in." >&2
+    exit 1
+fi
+
+# --- engine sanity: the packaged engine must answer --------------------------
+if ! /usr/local/bin/update-vms.sh --version >/dev/null 2>&1; then
+    echo "pve-updater: packaged engine did not answer --version" >&2
+    exit 1
+fi
+
+# --- systemd: reload + enable; start on first install, restart if running ---
+systemctl daemon-reload
+systemctl enable pve-updater.service >/dev/null 2>&1 || true
+if systemctl is-active --quiet pve-updater.service; then
+    systemctl restart pve-updater.service
+fi
+
+echo "pve-updater installed. UI: https://<node>:8765/ (bind is 127.0.0.1 by"
+echo "default — see /opt/pve-updater/docs/BACKEND.md before LAN exposure)."
+exit 0
