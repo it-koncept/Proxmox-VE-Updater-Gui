@@ -196,6 +196,10 @@ def make_handler(be):
             u = urlparse(self.path)
             if u.path in UI_FILES:
                 return self._send_static(u.path)
+            if u.path == "/favicon.ico":
+                self.send_response(204)
+                self.end_headers()
+                return
             if u.path == "/api/health":
                 return self._send(200, {"status": "ok",
                                         "engine_version": cfg.get("engine_version", "unknown"),
@@ -219,13 +223,19 @@ def make_handler(be):
                         data = be.auth._get("/nodes/" + node + path, ticket)
                         for row in data.get("data") or []:
                             if isinstance(row, dict) and row.get("vmid") is not None:
-                                guests.append({
+                                entry = {
                                     "type": kind,
                                     "vmid": row["vmid"],
                                     "name": str(row.get("name", ""))[:64],
                                     "status": str(row.get("status", ""))[:24],
                                     "tags": str(row.get("tags", ""))[:256],
-                                })
+                                }
+                                if kind == "qemu":
+                                    # agent state: QEMU updates need a
+                                    # responding guest agent; surface it so
+                                    # the UI can warn before creating a job
+                                    entry["agent"] = str(row.get("agent", ""))[:24]
+                                guests.append(entry)
                 except Exception:
                     return self._send(502, {"error": "PVE guest list failed"})
                 return self._send(200, guests)

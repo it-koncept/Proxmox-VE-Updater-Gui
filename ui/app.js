@@ -139,7 +139,15 @@ async function loadGuests() {
     tr.appendChild(el("td", null, g.vmid));
     tr.appendChild(el("td", null, g.name));
     tr.appendChild(el("td", null, g.type));
-    tr.appendChild(el("td", null, g.status));
+    let statusText = g.status;
+    let warnCell = null;
+    if (g.type === "qemu" && g.status === "running" && g.agent !== "running") {
+      // missing agent field = not configured in PVE; both cases mean
+      // qm guest exec will fail and the engine will skip this guest
+      statusText += " (agent: " + (g.agent || "not configured") + ")";
+      warnCell = "warn";
+    }
+    tr.appendChild(el("td", warnCell, statusText));
     tr.appendChild(el("td", null, g.tags));
     const td = el("td");
     if (hasPriv("vms/" + g.vmid, ["VM.Allocate"])) {

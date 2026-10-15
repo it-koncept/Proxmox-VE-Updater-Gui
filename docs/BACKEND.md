@@ -62,7 +62,7 @@ proxy; decision Q8 still open. Never bind a raw HTTP port to a public iface.
   `visudo -cf` at install.
 
 ## Tests
-`python3 tests/backend/run_backend_tests.py` — 33 cases against a fake PVE
+`python3 tests/backend/run_backend_tests.py` — 43 cases against a fake PVE
 API and a fake engine stub: authN (401s, CRLF), login relay (wrong pw 401,
 rate-limit 429 after 5 fails, HttpOnly/SameSite=Strict cookie, TFA challenge
 roundtrip), logout cookie clear, authZ (auditor vs admin, host policy), CSRF,
@@ -74,6 +74,24 @@ PVE calls.
 
 `tests/backend/dev_harness.py [port]` — same fakes, fixed port, for manual/
 browser QA of `ui/` (login admin@pve / pw-admin are fake credentials).
+
+## QEMU/KVM guests (Phase 5)
+Execution inside QEMU guests goes through `qm guest exec`, which requires a
+RESPONDING qemu-guest-agent (installed in the guest OS AND `agent: 1` in the
+VM config). The engine's preflight skips non-responding guests (job status
+`unsupported`, never `succeeded`). Timeout layering: the engine passes
+`--timeout 1800` (env QEMU_EXEC_TIMEOUT) to `qm guest exec`; the backend's
+`update_timeout` must stay strictly larger (default 7200) so the runner-level
+timeout only fires as the outer backstop. The engine never reboots guests;
+kernel/libc updates may therefore need a manual maintenance window — the UI
+shows the engine's per-guest outcome verbatim. The UI's guest list surfaces
+each QEMU guest's agent state (warn-styled when not running) so operators
+see why a QEMU target will be skipped before creating a job.
+Live status of this fleet (2026-10-15): NO QEMU guest on prod-node answers its
+agent (102/130 have agent=1 configured but do not respond; 104/147 have no
+agent configured). End-to-end QEMU execution against a real agent is
+therefore NOT yet verifiable on this fleet without installing
+qemu-guest-agent inside a guest (production change, needs maintainer go).
 
 ## GUI (Phase 3)
 `ui/` is static vanilla JS served by the backend itself (fixed asset map,

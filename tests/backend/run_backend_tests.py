@@ -101,6 +101,9 @@ class FakePve(BaseHTTPRequestHandler):
             return
         if ticket in TICKETS and "/nodes/testnode/qemu" in self.path:
             self._json({"data": [{"vmid": 207, "name": "vm-test",
+                                  "status": "running", "tags": "apt",
+                                  "agent": "running"},
+                                 {"vmid": 208, "name": "vm-noagent",
                                   "status": "running", "tags": "apt"}]})
             return
         if ticket in TICKETS and "/nodes/testnode/lxc" in self.path:
@@ -297,6 +300,24 @@ class BackendTests(unittest.TestCase):
         ids = {(g["type"], g["vmid"]) for g in out}
         self.assertIn(("lxc", 107), ids)
         self.assertIn(("qemu", 207), ids)
+
+    # ---- Phase 5: QEMU/KVM guests (agent-gated) ------------------------------
+    def test_guests_expose_agent_state_for_qemu(self):
+        st, out = req("GET", "/api/guests", ticket="t-admin")
+        by_id = {g["vmid"]: g for g in out}
+        self.assertEqual(by_id[207].get("agent"), "running")
+        self.assertEqual(by_id[208].get("agent", ""), "")
+        self.assertNotIn("agent", by_id[107])  # lxc has no agent concept
+
+    def test_qemu_full_flow_succeeds(self):
+        job_id = full_job(target_type="qemu", target_id="207")
+        self.assertEqual(BE.store.get_job(job_id)["status"], "succeeded")
+
+    def test_qemu_agent_down_maps_unsupported(self):
+        # engine preflight skips agent-less QEMU guests; rc 0 + skipped must
+        # surface as unsupported, never succeeded
+        res = self._run_direct("qemu", "208", "update", "skip")
+        self.assertEqual(res["status"], "unsupported")
 
     def test_guests_forbidden_without_read(self):
         st, _ = req("GET", "/api/guests", ticket="t-nobody")
