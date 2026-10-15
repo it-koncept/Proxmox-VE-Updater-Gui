@@ -10,14 +10,21 @@ executes updates only through a narrow root-runner sudoers rule.
 - root shell on the node
 
 ## Install (recommended)
-Download this repo's `install.sh`, review it, then run it as root on the node:
+This repo is currently **private**, so downloads need a token (or `gh`).
+Copy `install.sh` from the repo, review it, then run on the node as root:
 
-    curl -fsSL https://raw.githubusercontent.com/it-koncept/Proxmox-VE-Updater-Gui/main/install.sh -o install.sh
-    less install.sh          # review before running
-    sudo bash install.sh
+    GH_TOKEN=*** bash install.sh
 
-It fetches the latest release `.deb`, installs it, and enables the service.
-Re-running upgrades in place.
+(fine-grained PAT, `contents:read` on this repo only — create at
+GitHub → Settings → Developer settings → Fine-grained tokens; delete it
+afterwards if you like.) Or with `gh` installed on the node:
+
+    gh release download --repo it-koncept/Proxmox-VE-Updater-Gui --pattern '*.deb'
+    sudo apt-get install ./pve-updater_*_all.deb
+    sudo systemctl enable --now pve-updater
+
+The script fetches the latest release `.deb`, installs it, and enables the
+service. Re-running upgrades in place.
 
 ## Install (manual)
 Download `pve-updater_<version>_all.deb` from the GitHub Releases page and:
