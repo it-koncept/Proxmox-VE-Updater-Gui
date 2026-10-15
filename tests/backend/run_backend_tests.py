@@ -483,6 +483,56 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(BE.store.get_job(jid)["status"], "interrupted")
         set_mode("normal")
 
+    # ---- Phase 4: execution status mapping (engine rc + report) --------------
+    def _run_direct(self, ttype, tid, op, mode):
+        import uuid
+        set_mode(mode)
+        qd = os.path.join(CFG["store_dir"], "queue")
+        os.makedirs(qd, exist_ok=True)
+        jid = str(uuid.uuid4())
+        doc = {"job_id": jid, "target_type": ttype, "target_id": tid,
+               "operation": op,
+               "fingerprint": jobs_mod.fingerprint(ttype, tid, op,
+                                                   ["pkg1", "pkg2"]),
+               "approved_at": jobs_mod.now_iso(), "ttl_s": 900}
+        with open(os.path.join(qd, jid + ".job"), "w") as f:
+            json.dump(doc, f)
+        subprocess.run(CFG["runner_cmd"], timeout=30)
+        with open(os.path.join(qd, jid + ".result")) as f:
+            res = json.load(f)
+        # consume-once: the runner must have removed the .job file itself
+        assert not os.path.exists(os.path.join(qd, jid + ".job"))
+        set_mode("normal")
+        return res
+
+    def test_guest_failure_maps_failed(self):
+        self.assertEqual(self._run_direct("lxc", "107", "update", "fail")["status"], "failed")
+
+    def test_preflight_rc2_maps_failed(self):
+        self.assertEqual(self._run_direct("lxc", "107", "update", "preflight")["status"], "failed")
+
+    def test_lock_busy_rc3_maps_blocked(self):
+        self.assertEqual(self._run_direct("lxc", "107", "update", "lock")["status"], "blocked")
+
+    def test_skipped_guest_maps_unsupported_not_succeeded(self):
+        # no agent / target locked / disk gate: rc 0 but nothing was updated
+        self.assertEqual(self._run_direct("lxc", "107", "update", "skip")["status"], "unsupported")
+
+    def test_warning_maps_partial(self):
+        self.assertEqual(self._run_direct("lxc", "107", "update", "warn")["status"], "partial")
+
+    def test_host_flow_uses_yes_flag_and_succeeds(self):
+        job_id = full_job(target_type="host", target_id="testnode",
+                          operation="host-update")
+        job = BE.store.get_job(job_id)
+        self.assertEqual(job["status"], "succeeded")
+        self.assertIn("--host --yes", calls())
+
+    def test_runner_blocks_host_node_mismatch(self):
+        res = self._run_direct("host", "othernode", "host-update", "normal")
+        self.assertEqual(res["status"], "blocked")
+        self.assertIn("configured node", res["error"])
+
     # ---- history + log hygiene (SEC-011) ---------------------------------------
     def test_history_readable_by_auditor(self):
         job_id = full_job()

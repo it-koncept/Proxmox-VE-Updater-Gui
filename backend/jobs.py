@@ -30,7 +30,7 @@ ALLOWED = {
     "awaiting_approval": {"approved", "cancelled", "blocked", "failed"},
     "approved": {"running", "cancelled", "blocked", "failed"},
     "running": {"verifying", "succeeded", "failed", "interrupted", "partial",
-                "blocked"},
+                "blocked", "unsupported"},
     "verifying": {"succeeded", "partial", "failed", "interrupted"},
 }
 
@@ -211,7 +211,7 @@ class Store:
             return None
 
     def clear_queue(self, job_id):
-        for ext in (".job", ".result"):
+        for ext in (".job", ".result", ".report.json"):
             try:
                 os.remove(os.path.join(self.dir, "queue", job_id + ext))
             except FileNotFoundError:

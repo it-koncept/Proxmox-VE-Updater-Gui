@@ -15,7 +15,8 @@ idx_of() {
 }
 if has --scan; then
     i=$(idx_of --report); rp="${args[$((i+1))]}"
-    i=$(idx_of --only); id="${args[$((i+1))]:-0}"
+    i=$(idx_of --only)
+    if [ "$i" -ge 0 ]; then id="${args[$((i+1))]}"; else id=0; fi
     pkgs='["pkg1","pkg2"]'
     case "$mode" in
         changed) pkgs='["pkgX"]' ;;
@@ -37,6 +38,17 @@ fi
 i=$(idx_of --report)
 if [ "$i" -ge 0 ]; then
     rp="${args[$((i+1))]}"
+    case "$mode" in
+        fail)      printf '{"mode":"update","guests":[{"vmid":107,"status":"failed"}]}\n' > "$rp"; exit 1 ;;
+        preflight) echo "preflight error" >&2; exit 2 ;;
+        lock)      echo "another run holds the lock" >&2; exit 3 ;;
+        skip)      printf '{"mode":"update","guests":[{"vmid":107,"status":"skipped"}]}\n' > "$rp"; exit 0 ;;
+        warn)      printf '{"mode":"update","guests":[{"vmid":107,"status":"warning"}]}\n' > "$rp"; exit 0 ;;
+    esac
+    if has --host; then
+        printf '{"mode":"host-update","guests":[{"vmid":0,"status":"success"}]}\n' > "$rp"
+        exit 0
+    fi
     printf '{"mode":"update","guests":[{"vmid":107,"status":"success"}]}\n' > "$rp"
 fi
 exit 0

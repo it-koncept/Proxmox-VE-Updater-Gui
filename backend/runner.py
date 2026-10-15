@@ -65,7 +65,7 @@ def scan_packages(cfg, target_type, target_id):
             pass
 
 
-def validate_job(doc):
+def validate_job(doc, node=None):
     """Return (ok, reason). Strict: unknown keys rejected."""
     if not isinstance(doc, dict):
         return False, "not an object"
@@ -81,6 +81,10 @@ def validate_job(doc):
     if doc["target_type"] == "host":
         if not NODE_RE.match(tid):
             return False, "target_id(node)"
+        # --host always acts on the LOCAL node; a job naming another node
+        # would silently target the wrong machine. Refuse.
+        if node and tid != str(node):
+            return False, "target_id(node) != configured node"
     elif not GUEST_ID_RE.match(tid):
         return False, "target_id"
     if doc.get("operation") not in OPERATIONS:
@@ -122,6 +126,36 @@ def write_result(queue_dir, job_id, status, exit_code=None, error=None,
         os.chmod(lp, 0o640)
 
 
+def map_engine_status(rc, report_path):
+    """Map engine rc + per-guest report statuses to a job status.
+    Engine contract: 0 ok, 1 guest failure(s), 2 preflight, 3 lock busy.
+    A guest that was SKIPPED (no agent, target locked, disk gate) must never
+    be recorded as succeeded even when rc==0."""
+    try:
+        with open(report_path) as f:
+            rep = json.load(f)
+        sts = [str(g.get("status", "")) for g in rep.get("guests", [])
+               if isinstance(g, dict)]
+    except Exception:
+        sts = []
+    if sts:
+        if "failed" in sts:
+            return "failed"
+        if all(s == "skipped" for s in sts):
+            return "unsupported"
+        if all(s == "success" for s in sts):
+            return "succeeded"
+        return "partial"  # warnings / mixed outcomes
+    # no usable report: fall back to the rc contract
+    if rc == 0:
+        return "succeeded"
+    if rc == 1:
+        return "partial"
+    if rc == 3:
+        return "blocked"
+    return "failed"
+
+
 def process_job(cfg, queue_dir, path):
     job_id = os.path.basename(path)[:-4]
     try:
@@ -130,7 +164,7 @@ def process_job(cfg, queue_dir, path):
     except Exception as e:
         write_result(queue_dir, job_id, "failed", error=f"unreadable job: {e}")
         return
-    ok, reason = validate_job(doc)
+    ok, reason = validate_job(doc, cfg.get("node"))
     if not ok:
         write_result(queue_dir, job_id, "blocked", error=f"validation: {reason}")
         return
@@ -163,9 +197,7 @@ def process_job(cfg, queue_dir, path):
         write_result(queue_dir, job_id, "failed", error=f"exec: {e}")
         return
     log_text = (p.stdout or "") + "\n" + (p.stderr or "")
-    status = "succeeded" if p.returncode == 0 else "failed"
-    if p.returncode == 3:
-        status = "blocked"  # lock busy
+    status = map_engine_status(p.returncode, report)
     write_result(queue_dir, job_id, status, exit_code=p.returncode,
                  error=None if p.returncode == 0 else f"engine rc={p.returncode}",
                  log_text=log_text)
@@ -179,7 +211,15 @@ def main():
     queue_dir = os.path.join(cfg["store_dir"], "queue")
     pending = sorted(f for f in os.listdir(queue_dir) if f.endswith(".job"))
     for name in pending:
-        process_job(cfg, queue_dir, os.path.join(queue_dir, name))
+        path = os.path.join(queue_dir, name)
+        process_job(cfg, queue_dir, path)
+        # consume-once: remove the job file immediately after its result is
+        # written, so a backend crash before clear_queue can never cause a
+        # second execution of the same approved update.
+        try:
+            os.remove(path)
+        except OSError:
+            pass
     return 0
 
 
