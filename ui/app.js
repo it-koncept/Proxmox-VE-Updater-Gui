@@ -170,7 +170,7 @@ async function loadGuests() {
   }
 }
 
-/* ---------- update flow: preview -> approve (fingerprint echo) -> start ---- */
+/* ---------- update flow: preview -> (approve) -> start; fingerprint-free -- */
 let flow = null;
 
 async function startFlow(ttype, tid, name, op) {
@@ -178,6 +178,7 @@ async function startFlow(ttype, tid, name, op) {
     const r = await api("POST", "/api/jobs",
       { target_type: ttype, target_id: tid, target_name: name, operation: op });
     flow = r.job;
+    flow.packages = r.packages || [];
     renderActive();
   } catch (e) {
     alert("Could not create job: " + e.message);
@@ -199,25 +200,20 @@ function renderActive() {
     box.appendChild(ul);
   }
   if (flow.status === "awaiting_approval") {
-    box.appendChild(el("p", null, "Packages change if the guest updates in the " +
-      "meantime; starting re-verifies a fingerprint and blocks on mismatch."));
-    box.appendChild(el("p", "fp", "fingerprint: " + flow.preview_fingerprint));
-    const inp = el("input");
-    inp.size = 40;
-    inp.placeholder = "paste fingerprint to approve";
+    box.appendChild(el("p", "muted", "review the package list, then approve."));
     const btnA = el("button", null, "Approve");
     btnA.addEventListener("click", async () => {
       try {
-        const r = await api("POST", "/api/jobs/" + flow.job_id + "/approve",
-          { confirm_fingerprint: inp.value.trim() });
+        const r = await api("POST", "/api/jobs/" + flow.job_id + "/approve", {});
         flow = r.job; renderActive();
       } catch (e) { alert("approve: " + e.message); }
     });
-    box.appendChild(inp); box.appendChild(btnA);
+    box.appendChild(btnA);
   }
-  if (flow.status === "approved") {
-    box.appendChild(el("p", "muted", "approved — start within the approval " +
-      "window, otherwise the job blocks."));
+  if (flow.status === "ready" || flow.status === "approved") {
+    if (flow.status === "approved")
+      box.appendChild(el("p", "muted", "approved — start within the approval " +
+        "window, otherwise the job blocks."));
     const btnS = el("button", "primary", "Start update");
     btnS.addEventListener("click", async () => {
       try {
@@ -226,6 +222,17 @@ function renderActive() {
       } catch (e) { alert("start: " + e.message); renderActive(); }
     });
     box.appendChild(btnS);
+  }
+  if (flow.status === "ready" || flow.status === "awaiting_approval" ||
+      flow.status === "approved") {
+    const btnC = el("button", null, "Cancel");
+    btnC.addEventListener("click", async () => {
+      try {
+        const r = await api("POST", "/api/jobs/" + flow.job_id + "/cancel", {});
+        flow = r.job; renderActive(); loadHistory();
+      } catch (e) { alert("cancel: " + e.message); renderActive(); }
+    });
+    box.appendChild(btnC);
   }
   if (["succeeded", "failed", "blocked", "interrupted", "cancelled",
        "unsupported", "partial"].includes(flow.status)) {

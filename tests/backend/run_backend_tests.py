@@ -167,6 +167,7 @@ CFG = {
     "update_privs": ["VM.Allocate"],
     "host_update_privs": ["Sys.Modify"],
     "approval_ttl_s": 900,
+    "require_approval": True,
     "runner_cmd": [sys.executable, os.path.join(ROOT, "backend", "runner.py")],
     "scan_timeout": 20,
     "update_timeout": 20,
@@ -187,10 +188,24 @@ PORT = HTTPD.server_address[1]
 threading.Thread(target=HTTPD.serve_forever, daemon=True).start()
 BASE = f"http://127.0.0.1:{PORT}"
 
+# ---- second backend instance: require_approval=False (product default) -----
+CFG2 = dict(CFG)
+CFG2["require_approval"] = False
+CFG2["store_dir"] = os.path.join(TMP, "store2")
+CFG2["runner_cmd"] = CFG["runner_cmd"][:2] + ["--config",
+                                              os.path.join(TMP, "config2.json")]
+CFG2_PATH = os.path.join(TMP, "config2.json")
+with open(CFG2_PATH, "w") as f:
+    json.dump(CFG2, f)
+BE2 = server_mod.Backend(CFG2)
+HTTPD2 = ThreadingHTTPServer(("127.0.0.1", 0), server_mod.make_handler(BE2))
+threading.Thread(target=HTTPD2.serve_forever, daemon=True).start()
+BASE2 = f"http://127.0.0.1:{HTTPD2.server_address[1]}"
 
-def req(method, path, ticket=None, csrf=None, body=None):
+
+def req(method, path, ticket=None, csrf=None, body=None, base=None):
     data = json.dumps(body).encode() if body is not None else None
-    r = urllib.request.Request(BASE + path, data=data, method=method)
+    r = urllib.request.Request((base or BASE) + path, data=data, method=method)
     if ticket:
         r.add_header("Cookie", "PVEAuthCookie=" + ticket)
     if csrf:
@@ -229,8 +244,7 @@ def full_job(target_type="lxc", target_id="107", operation="update"):
     assert st == 201, out
     job = out["job"]
     st, out = req("POST", f"/api/jobs/{job['job_id']}/approve", "t-admin",
-                  "csrf-admin",
-                  {"confirm_fingerprint": job["preview_fingerprint"]})
+                  "csrf-admin", {})
     assert st == 200, out
     st, out = req("POST", f"/api/jobs/{job['job_id']}/start", "t-admin",
                   "csrf-admin", {})
@@ -470,18 +484,23 @@ class BackendTests(unittest.TestCase):
         # engine got a fixed argv with the numeric id only
         self.assertIn("--only 107 --report", calls())
 
-    def test_approve_requires_fingerprint_echo(self):
+    def test_approve_needs_no_fingerprint_echo(self):
+        # fingerprint-approval friction removed by maintainer request
         st, out = req("POST", "/api/jobs", "t-admin", "csrf-admin",
                       {"target_type": "lxc", "target_id": "107",
                        "operation": "update"})
         job_id = out["job"]["job_id"]
-        st, _ = req("POST", f"/api/jobs/{job_id}/approve", "t-admin",
-                    "csrf-admin", {"confirm_fingerprint": "deadbeef"})
-        self.assertEqual(st, 400)
         st, _ = req("POST", f"/api/jobs/{job_id}/start", "t-admin",
                     "csrf-admin", {})
-        self.assertEqual(st, 409)  # not approved
-        BE.store.transition(job_id, "cancelled")  # free the target
+        self.assertEqual(st, 409)  # not approved yet
+        st, out = req("POST", f"/api/jobs/{job_id}/approve", "t-admin",
+                      "csrf-admin", {})
+        self.assertEqual(st, 200)
+        self.assertEqual(out["job"]["status"], "approved")
+        st, _ = req("POST", f"/api/jobs/{job_id}/start", "t-admin",
+                    "csrf-admin", {})
+        self.assertEqual(st, 200)
+        self.assertEqual(BE.store.get_job(job_id)["status"], "succeeded")
 
     def test_stale_approval_blocks(self):
         job_id = full_job()  # uses 107; free it by success
@@ -492,24 +511,25 @@ class BackendTests(unittest.TestCase):
                        "operation": "update"})
         self.assertEqual(st, 201)
         jid = out["job"]["job_id"]
-        req("POST", f"/api/jobs/{jid}/approve", "t-admin", "csrf-admin",
-            {"confirm_fingerprint": out["job"]["preview_fingerprint"]})
+        req("POST", f"/api/jobs/{jid}/approve", "t-admin", "csrf-admin", {})
         st, _ = req("POST", f"/api/jobs/{jid}/start", "t-admin", "csrf-admin", {})
         self.assertEqual(st, 409)
         self.assertEqual(BE.store.get_job(jid)["status"], "blocked")
         CFG["approval_ttl_s"] = 900
 
-    def test_changed_preview_blocks(self):
+    def test_changed_preview_still_runs(self):
+        # fingerprint re-check removed: a preview that changed between
+        # create and start must NOT block the run (engine re-checks state
+        # inside the guest itself)
         st, out = req("POST", "/api/jobs", "t-admin", "csrf-admin",
                       {"target_type": "lxc", "target_id": "107",
                        "operation": "update"})
         jid = out["job"]["job_id"]
-        req("POST", f"/api/jobs/{jid}/approve", "t-admin", "csrf-admin",
-            {"confirm_fingerprint": out["job"]["preview_fingerprint"]})
-        set_mode("changed")  # runner re-scan now differs from approved fp
+        req("POST", f"/api/jobs/{jid}/approve", "t-admin", "csrf-admin", {})
+        set_mode("changed")  # package list now differs from the preview
         st, _ = req("POST", f"/api/jobs/{jid}/start", "t-admin", "csrf-admin", {})
         self.assertEqual(st, 200)
-        self.assertEqual(BE.store.get_job(jid)["status"], "blocked")
+        self.assertEqual(BE.store.get_job(jid)["status"], "succeeded")
 
     # ---- concurrency (FR-014) -------------------------------------------------
     def test_duplicate_active_job_rejected(self):
@@ -531,7 +551,8 @@ class BackendTests(unittest.TestCase):
         bad = {"job_id": "00000000-0000-0000-0000-000000000000",
                "target_type": "lxc", "target_id": "107; evil",
                "operation": "update", "fingerprint": "0" * 64,
-               "approved_at": jobs_mod.now_iso(), "ttl_s": 900}
+               "approved_at": jobs_mod.now_iso(), "ttl_s": 900,
+               "require_approval": True}
         with open(os.path.join(qd, bad["job_id"] + ".job"), "w") as f:
             json.dump(bad, f)
         subprocess.run(CFG["runner_cmd"], timeout=30)
@@ -566,7 +587,8 @@ class BackendTests(unittest.TestCase):
                "operation": op,
                "fingerprint": jobs_mod.fingerprint(ttype, tid, op,
                                                    ["pkg1", "pkg2"]),
-               "approved_at": jobs_mod.now_iso(), "ttl_s": 900}
+               "approved_at": jobs_mod.now_iso(), "ttl_s": 900,
+               "require_approval": True}
         with open(os.path.join(qd, jid + ".job"), "w") as f:
             json.dump(doc, f)
         subprocess.run(CFG["runner_cmd"], timeout=30)
@@ -631,8 +653,55 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(out["backup_status"], "ok")
 
 
+class TestNoApprovalMode(unittest.TestCase):
+    def test_me_exposes_require_approval(self):
+        st, out = req("GET", "/api/me", "t-admin", base=BASE2)
+        self.assertEqual(st, 200)
+        self.assertFalse(out["require_approval"])
+        st, out = req("GET", "/api/me", "t-admin")
+        self.assertEqual(st, 200)
+        self.assertTrue(out["require_approval"])
+
+    def test_create_starts_directly_without_approval(self):
+        st, out = req("POST", "/api/jobs", "t-admin", "csrf-admin",
+                      {"target_type": "lxc", "target_id": "107",
+                       "operation": "update"}, base=BASE2)
+        self.assertEqual(st, 201)
+        jid = out["job"]["job_id"]
+        self.assertEqual(out["job"]["status"], "ready")
+        st, _ = req("POST", f"/api/jobs/{jid}/approve", "t-admin",
+                    "csrf-admin", {}, base=BASE2)
+        self.assertEqual(st, 409)  # approval endpoint disabled in this mode
+        st, _ = req("POST", f"/api/jobs/{jid}/start", "t-admin",
+                    "csrf-admin", {}, base=BASE2)
+        self.assertEqual(st, 200)
+        self.assertEqual(BE2.store.get_job(jid)["status"], "succeeded")
+
+    def test_cancel_ready_job_frees_target(self):
+        st, out = req("POST", "/api/jobs", "t-admin", "csrf-admin",
+                      {"target_type": "lxc", "target_id": "107",
+                       "operation": "update"}, base=BASE2)
+        self.assertEqual(st, 201)
+        jid = out["job"]["job_id"]
+        st, _ = req("POST", f"/api/jobs/{jid}/cancel", "t-admin",
+                    "csrf-admin", {}, base=BASE2)
+        self.assertEqual(st, 200)
+        self.assertEqual(BE2.store.get_job(jid)["status"], "cancelled")
+        # target is free again: a new job can be created
+        st, _ = req("POST", "/api/jobs", "t-admin", "csrf-admin",
+                    {"target_type": "lxc", "target_id": "107",
+                     "operation": "update"}, base=BASE2)
+        self.assertEqual(st, 201)
+        st, out2 = req("GET", "/api/jobs?limit=5", "t-admin", base=BASE2)
+        new = [j for j in out2 if j["job_id"] != jid and j["status"] == "ready"]
+        for j in new:
+            req("POST", f"/api/jobs/{j['job_id']}/cancel", "t-admin",
+                "csrf-admin", {}, base=BASE2)
+
+
 def tearDownModule():
     HTTPD.shutdown()
+    HTTPD2.shutdown()
     pve_httpd.shutdown()
     shutil.rmtree(TMP, ignore_errors=True)
 

@@ -7,7 +7,7 @@ set -eu
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 ENGINE="${1:-$ROOT/../Proxmox-VE-Updater/update-vms.sh}"
-VERSION="0.9.0-10"
+VERSION="0.9.0-11"
 REQ_ENGINE_VERSION="3.5.0"
 
 # --- pin the engine: refuse to package an unexpected version ----------------
@@ -54,6 +54,7 @@ cfg = {
   "update_privs": ["VM.Allocate"],
   "host_update_privs": ["Sys.Modify"],
   "approval_ttl_s": 900,
+  "require_approval": False,
   "runner_cmd": ["sudo", "/usr/local/sbin/pve-updater-runner", "--config", "/etc/pve-updater/config.json"],
   "scan_timeout": 600,
   "update_timeout": 7200,

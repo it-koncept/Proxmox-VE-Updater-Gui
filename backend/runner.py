@@ -75,7 +75,7 @@ def validate_job(doc, node=None):
     if not isinstance(doc, dict):
         return False, "not an object"
     allowed_keys = {"job_id", "target_type", "target_id", "operation",
-                    "fingerprint", "approved_at", "ttl_s"}
+                    "fingerprint", "approved_at", "ttl_s", "require_approval"}
     if set(doc.keys()) != allowed_keys:
         return False, "schema keys"
     if not JOBID_RE.match(str(doc.get("job_id", ""))):
@@ -97,26 +97,40 @@ def validate_job(doc, node=None):
     fp = str(doc.get("fingerprint", ""))
     if not re.match(r"^[0-9a-f]{64}$", fp):
         return False, "fingerprint"
-    if not isinstance(doc.get("approved_at"), str) or \
-            not re.match(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$",
-                         doc["approved_at"]):
-        return False, "approved_at"
-    if not isinstance(doc.get("ttl_s"), int) or doc["ttl_s"] <= 0 or \
-            doc["ttl_s"] > 86400:
-        return False, "ttl_s"
-    import calendar
-    import time
-    approved = calendar.timegm(time.strptime(doc["approved_at"],
-                                             "%Y-%m-%dT%H:%M:%SZ"))
-    if time.time() - approved > doc["ttl_s"]:
-        return False, "approval expired"
+    if doc.get("require_approval"):
+        if not isinstance(doc.get("approved_at"), str) or \
+                not re.match(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$",
+                             doc["approved_at"]):
+            return False, "approved_at"
+        if not isinstance(doc.get("ttl_s"), int) or doc["ttl_s"] <= 0 or \
+                doc["ttl_s"] > 86400:
+            return False, "ttl_s"
+        import calendar
+        import time
+        approved = calendar.timegm(time.strptime(doc["approved_at"],
+                                                 "%Y-%m-%dT%H:%M:%SZ"))
+        if time.time() - approved > doc["ttl_s"]:
+            return False, "approval expired"
     return True, None
 
 
 def write_result(queue_dir, job_id, status, exit_code=None, error=None,
                  log_text=None):
+    # The runner runs as ROOT; the backend reads these files as the
+    # unprivileged service user. Files must therefore carry the queue/log
+    # dir's group (found via stat, not assumed) or the backend cannot read
+    # them and every job looks 'interrupted' (found live on test-node).
+    def _gid_of(path):
+        try:
+            return os.stat(path).st_gid
+        except OSError:
+            return -1
     path = os.path.join(queue_dir, job_id + ".result")
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+    try:
+        os.fchown(fd, -1, _gid_of(queue_dir))
+    except OSError:
+        pass
     with os.fdopen(fd, "w") as f:
         json.dump({"job_id": job_id, "status": status, "exit_code": exit_code,
                    "error": (str(error)[:512] if error else None)}, f)
@@ -126,6 +140,10 @@ def write_result(queue_dir, job_id, status, exit_code=None, error=None,
         os.makedirs(log_dir, exist_ok=True)
         lp = os.path.join(log_dir, job_id + ".log")
         lfd = os.open(lp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+        try:
+            os.fchown(lfd, -1, _gid_of(log_dir))
+        except OSError:
+            pass
         with os.fdopen(lfd, "w") as f:
             f.write(str(log_text)[:200000])
         os.chmod(lp, 0o640)
@@ -173,16 +191,11 @@ def process_job(cfg, queue_dir, path):
     if not ok:
         write_result(queue_dir, job_id, "blocked", error=f"validation: {reason}")
         return
-    # fresh scan + fingerprint re-check (stale approval protection)
-    pkgs, scan_ok = scan_packages(cfg, doc["target_type"], doc["target_id"])
-    if not scan_ok:
-        write_result(queue_dir, job_id, "blocked", error="re-scan failed")
-        return
-    if fingerprint(doc["target_type"], doc["target_id"], doc["operation"],
-                   pkgs) != doc["fingerprint"]:
-        write_result(queue_dir, job_id, "blocked",
-                     error="preview changed; fresh approval required")
-        return
+    # NOTE: no fingerprint re-check here. The maintainer removed the
+    # fingerprint-approval friction (2026-10-15): the preview fingerprint is
+    # kept for audit only. The engine itself re-checks package state at run
+    # time (apt -s upgrade inside the guest), so a stale preview cannot
+    # install anything unexpected.
     # fixed argv, no shell
     if doc["target_type"] == "host":
         argv = [cfg["engine"], "--host", "--yes"]

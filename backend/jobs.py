@@ -23,10 +23,11 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-ACTIVE = ("awaiting_approval", "approved", "running")
+ACTIVE = ("ready", "awaiting_approval", "approved", "running")
 TERMINAL = ("succeeded", "failed", "cancelled", "interrupted", "blocked",
             "unsupported", "partial")
 ALLOWED = {
+    "ready": {"running", "cancelled", "blocked", "failed"},
     "awaiting_approval": {"approved", "cancelled", "blocked", "failed"},
     "approved": {"running", "cancelled", "blocked", "failed"},
     "running": {"verifying", "succeeded", "failed", "interrupted", "partial",
@@ -97,7 +98,8 @@ class Store:
 
     # ---- jobs -------------------------------------------------------------
     def create_job(self, *, actor, target_type, target_id, target_name,
-                   operation, fp, backup_status=None):
+                   operation, fp, backup_status=None,
+                   status="awaiting_approval"):
         job_id = str(uuid.uuid4())
         with self._lock:
             try:
@@ -107,7 +109,7 @@ class Store:
                     "status,backup_status,backup_checked_at) "
                     "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                     (job_id, now_iso(), actor, target_type, str(target_id),
-                     target_name, operation, fp, "awaiting_approval",
+                     target_name, operation, fp, status,
                      backup_status, now_iso()))
             except sqlite3.IntegrityError:
                 return None  # active job already exists for this target
@@ -185,7 +187,7 @@ class Store:
         return (time.time() - approved) <= ttl_s
 
     # ---- queue files (backend -> root runner) ------------------------------
-    def write_queue_file(self, job, runner_ttl_s):
+    def write_queue_file(self, job, runner_ttl_s, require_approval=True):
         path = os.path.join(self.dir, "queue", job["job_id"] + ".job")
         payload = {
             "job_id": job["job_id"],
@@ -195,6 +197,7 @@ class Store:
             "fingerprint": job["preview_fingerprint"],
             "approved_at": job["approved_at"],
             "ttl_s": runner_ttl_s,
+            "require_approval": bool(require_approval),
         }
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
         with os.fdopen(fd, "w") as f:

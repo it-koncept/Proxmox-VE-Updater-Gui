@@ -204,7 +204,10 @@ def make_handler(be):
             q = parse_qs(u.query)
             if u.path == "/api/me":
                 return self._send(200, {"userid": ident["userid"],
-                                        "permissions": ident["permissions"]})
+                                        "permissions": ident["permissions"],
+                                        "require_approval":
+                                            bool(cfg.get("require_approval",
+                                                         False))})
             if u.path == "/api/guests":
                 node = str(cfg.get("node", ""))
                 if not self._need_priv(ident, "/nodes/" + node,
@@ -366,7 +369,8 @@ def make_handler(be):
                 return self._logout()
             known = ("/api/jobs",)
             if not (u.path in known or
-                    re.match(r"^/api/jobs/[0-9a-f-]{36}/(approve|start)$", u.path)):
+                    re.match(r"^/api/jobs/[0-9a-f-]{36}/(approve|start|cancel)$",
+                             u.path)):
                 return self._send(404, {"error": "not found"})
             body = self._body() if self.headers.get("Content-Length") else {}
             if body is None:
@@ -403,17 +407,19 @@ def make_handler(be):
                     return self._send(502, {"error": "pre-scan failed"})
                 pkgs = be.scan_packages(rep, ttype, tid)
                 fp = jobs_mod.fingerprint(ttype, tid, op, pkgs)
+                require_ap = bool(cfg.get("require_approval", False))
                 with be.submit_lock:
                     job = be.store.create_job(
                         actor=ident["userid"], target_type=ttype, target_id=tid,
                         target_name=str(body.get("target_name", ""))[:64],
-                        operation=op, fp=fp)
+                        operation=op, fp=fp,
+                        status="awaiting_approval" if require_ap else "ready")
                 if job is None:
                     return self._send(409, {"error": "active job already exists "
                                                      "for this target"})
                 return self._send(201, {"job": job, "packages": pkgs})
 
-            m = re.match(r"^/api/jobs/([0-9a-f-]{36})/(approve|start)$", u.path)
+            m = re.match(r"^/api/jobs/([0-9a-f-]{36})/(approve|start|cancel)$", u.path)
             if not m:
                 return self._send(404, {"error": "not found"})
             job_id, action = m.group(1), m.group(2)
@@ -431,10 +437,20 @@ def make_handler(be):
                                        cfg["update_privs"],
                                        "update permission required"):
                     return
+            if action == "cancel":
+                if job["status"] in ("running", "verifying"):
+                    return self._send(409, {"error": "cannot cancel a running "
+                                                     "job; wait for it to finish"})
+                if not be.store.transition(job_id, "cancelled",
+                                           actor=ident["userid"]):
+                    return self._send(409, {"error": f"job is {job['status']}"})
+                return self._send(200, {"job": be.store.get_job(job_id)})
             if action == "approve":
-                if body.get("confirm_fingerprint") != job["preview_fingerprint"]:
-                    return self._send(400, {"error": "approval must echo the "
-                                                     "exact preview fingerprint"})
+                if not cfg.get("require_approval", False):
+                    return self._send(409, {"error": "approval is not required "
+                                                     "in this configuration"})
+                # fingerprint echo removed by maintainer request: the
+                # fingerprint stays an audit identifier only.
                 if not be.store.approve(job_id, ident["userid"],
                                         cfg["approval_ttl_s"]):
                     return self._send(409, {"error": "cannot approve (state?)"})
@@ -442,14 +458,20 @@ def make_handler(be):
 
             # action == start
             job = be.store.get_job(job_id)
-            if job["status"] == "approved" and not be.store.approval_valid(
-                    job, cfg["approval_ttl_s"]):
-                be.store.transition(job_id, "blocked", actor=ident["userid"],
-                                    error_summary="approval expired")
-                return self._send(409, {"error": "approval expired; job blocked"})
-            if job["status"] != "approved":
-                return self._send(409, {"error": f"job is {job['status']}"})
-            be.store.write_queue_file(job, cfg["approval_ttl_s"])
+            require_ap = bool(cfg.get("require_approval", False))
+            if require_ap:
+                if job["status"] == "approved" and not be.store.approval_valid(
+                        job, cfg["approval_ttl_s"]):
+                    be.store.transition(job_id, "blocked",
+                                        actor=ident["userid"],
+                                        error_summary="approval expired")
+                    return self._send(409, {"error": "approval expired; job blocked"})
+                if job["status"] != "approved":
+                    return self._send(409, {"error": f"job is {job['status']}"})
+            else:
+                if job["status"] != "ready":
+                    return self._send(409, {"error": f"job is {job['status']}"})
+            be.store.write_queue_file(job, cfg["approval_ttl_s"], require_ap)
             if not be.store.transition(job_id, "running", actor=ident["userid"]):
                 be.store.clear_queue(job_id)
                 return self._send(409, {"error": "cannot start (state?)"})

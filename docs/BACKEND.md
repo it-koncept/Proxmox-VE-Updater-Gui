@@ -100,7 +100,7 @@ file replacement. postrm purge deliberately KEEPS `/var/lib/pve-updater`
 is a documented manual step after review.
 
 Install (on a PVE node, maintainer-approved): `apt install
-./pve-updater_0.9.0-10_all.deb`. Upgrade: same command; conffile prompts
+./pve-updater_0.9.0-11_all.deb`. Upgrade: same command; conffile prompts
 protect local config/sudoers. Uninstall: `apt purge pve-updater` (audit data
 kept by design). Recovery: engine CLI + its systemd timer keep working even
 with the package removed; nothing PVE-owned is ever patched
