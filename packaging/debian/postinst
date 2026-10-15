@@ -55,6 +55,8 @@ systemctl daemon-reload
 systemctl enable pve-updater.service >/dev/null 2>&1 || true
 if systemctl is-active --quiet pve-updater.service; then
     systemctl restart pve-updater.service
+else
+    systemctl start pve-updater.service
 fi
 
 echo "pve-updater installed. UI: https://<node>:8765/ (bind is 127.0.0.1 by"

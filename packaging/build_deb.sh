@@ -7,7 +7,7 @@ set -eu
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 ENGINE="${1:-$ROOT/../Proxmox-VE-Updater/update-vms.sh}"
-VERSION="0.9.0-1"
+VERSION="0.9.0-3"
 REQ_ENGINE_VERSION="3.5.0"
 
 # --- pin the engine: refuse to package an unexpected version ----------------
@@ -31,7 +31,7 @@ chmod 0755 "$STAGE"/DEBIAN/postinst "$STAGE"/DEBIAN/prerm "$STAGE"/DEBIAN/postrm
 install -m 0755 "$ENGINE" "$STAGE/usr/local/bin/update-vms.sh"
 install -m 0755 backend/runner.py "$STAGE/usr/local/sbin/pve-updater-runner"
 install -m 0644 backend/server.py backend/pveauth.py backend/jobs.py \
-        "$STAGE/opt/pve-updater/backend/"
+        backend/runner.py "$STAGE/opt/pve-updater/backend/"
 install -m 0644 ui/index.html ui/app.js ui/style.css "$STAGE/opt/pve-updater/ui/"
 install -m 0644 docs/BACKEND.md "$STAGE/opt/pve-updater/docs/"
 install -m 0644 integration/sudoers.d.pve-updater \

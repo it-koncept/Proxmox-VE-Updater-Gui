@@ -1,9 +1,9 @@
 Package: pve-updater
-Version: 0.9.0-1
+Version: 0.9.0-3
 Section: admin
 Priority: optional
 Architecture: all
-Depends: python3 (>= 3.9), sudo, adduser
+Depends: python3 (>= 3.9), sudo, adduser, jq
 Maintainer: it-koncept <it-koncept@users.noreply.github.com>
 Homepage: https://github.com/it-koncept/Proxmox-VE-Updater-Gui
 Description: GUI companion for the Proxmox VE guest updater (Bash engine)
